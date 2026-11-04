@@ -132,8 +132,8 @@ void _patchRootGradleNamespaceFix() {
 
 // namiNamespaceFix
 subprojects {
-    afterEvaluate { project ->
-        if (project.hasProperty('android')) {
+    project.plugins.whenPluginAdded { plugin ->
+        if (plugin.class.name.contains('AndroidPlugin')) {
             project.android {
                 if (namespace == null) {
                     namespace project.group.toString()
@@ -144,10 +144,10 @@ subprojects {
                 }
             }
         }
-        project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-            kotlinOptions {
-                jvmTarget = "17"
-            }
+    }
+    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
         }
     }
 }
@@ -164,7 +164,7 @@ subprojects {
 
 // namiNamespaceFix
 subprojects {
-    afterEvaluate {
+    plugins.withId("com.android.library") {
         val androidExt = extensions.findByName("android")
         if (androidExt != null) {
             try {

@@ -39,8 +39,8 @@ void main() {
   _patchManifest(manifest);
   _patchMainActivity();
   _patchAppGradle();
-  _patchRootGradleLazyJvmFix();
-  print('Android project successfully patched for SDK 36 and lazy Java 17 enforcement.');
+  _patchRootGradleCleanFix();
+  print('Android project successfully patched for SDK 36 and safe Java 17 configuration.');
 }
 
 void _patchManifest(File file) {
@@ -126,7 +126,7 @@ void _patchAppGradle() {
   }
 }
 
-void _patchRootGradleLazyJvmFix() {
+void _patchRootGradleCleanFix() {
   for (final path in ['android/build.gradle.kts', 'android/build.gradle']) {
     final file = File(path);
     if (!file.existsSync()) continue;
@@ -136,17 +136,6 @@ void _patchRootGradleLazyJvmFix() {
     const fixKts = '''\n
 // namiLazyJvmFix
 allprojects {
-    afterEvaluate {
-        extensions.findByName("android")?.let { android ->
-            try {
-                val compileOptions = android.javaClass.getMethod("getCompileOptions").invoke(android)
-                compileOptions.javaClass.getMethod("getSourceCompatibility").invoke(compileOptions)
-                // Force Java 17 compatibility on all subprojects/plugins
-                compileOptions.javaClass.getMethod("setSourceCompatibility", JavaVersion::class.java).invoke(compileOptions, JavaVersion.VERSION_17)
-                compileOptions.javaClass.getMethod("setTargetCompatibility", JavaVersion::class.java).invoke(compileOptions, JavaVersion.VERSION_17)
-            } catch (_: Exception) {}
-        }
-    }
     tasks.withType(JavaCompile::class.java).configureEach {
         sourceCompatibility = "17"
         targetCompatibility = "17"
@@ -159,6 +148,6 @@ allprojects {
 }
 ''';
     file.writeAsStringSync('$text$fixKts');
-    break; // Patch root build.gradle / build.gradle.kts once
+    break;
   }
 }

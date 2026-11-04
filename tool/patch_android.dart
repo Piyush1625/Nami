@@ -52,14 +52,34 @@ void _patchPubCache() {
       var text = entity.readAsStringSync();
       var changed = false;
       
+      // Inject namespace for on_audio_query
       if (!text.contains('namespace') && entity.path.contains('on_audio_query')) {
         text = text.replaceFirst('android {', 'android {\n    namespace "com.lucasjosino.audio_query"');
         changed = true;
       }
-      if (text.contains('VERSION_1_8') || text.contains('VERSION_11')) {
-        text = text.replaceAll('VERSION_1_8', 'VERSION_17').replaceAll('VERSION_11', 'VERSION_17');
+      
+      // Force Java 17 compile options inside plugin android blocks
+      if (!text.contains('compileOptions') && text.contains('android {')) {
+        text = text.replaceFirst('android {', '''android {
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }''');
         changed = true;
       }
+
+      // Replace older Java/JVM targets with 17
+      if (text.contains('VERSION_1_8') || text.contains('VERSION_11') || text.contains("jvmTarget = '1.8'") || text.contains('jvmTarget = "11"')) {
+        text = text
+            .replaceAll('VERSION_1_8', 'VERSION_17')
+            .replaceAll('VERSION_11', 'VERSION_17')
+            .replaceAll("jvmTarget = '1.8'", "jvmTarget = '17'")
+            .replaceAll('jvmTarget = "1.8"', 'jvmTarget = "17"')
+            .replaceAll("jvmTarget = '11'", "jvmTarget = '17'")
+            .replaceAll('jvmTarget = "11"', 'jvmTarget = "17"');
+        changed = true;
+      }
+
       if (changed) {
         entity.writeAsStringSync(text);
       }

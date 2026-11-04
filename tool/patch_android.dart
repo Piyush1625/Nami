@@ -41,7 +41,7 @@ void main() {
   _patchAppGradle();
   _cleanRootGradle();
   _patchPubCachePlugins();
-  print('Android project and pub-cache plugins patched for Nami.');
+  print('Android project and pub-cache plugins patched for Nami (SDK 34).');
 }
 
 void _patchManifest(File file) {
@@ -112,14 +112,18 @@ void _patchAppGradle() {
     final file = File(path);
     if (!file.existsSync()) continue;
     var text = file.readAsStringSync();
-    text = text.replaceAll(
-      RegExp(r'minSdk\s*=?\s*flutter\.minSdkVersion'),
-      'minSdk = 21',
-    );
-    text = text.replaceAll(
-      RegExp(r'minSdkVersion\s+flutter\.minSdkVersion'),
-      'minSdkVersion 21',
-    );
+    text = text
+        .replaceAll(RegExp(r'minSdk\s*=?\s*.*'), 'minSdk = 21')
+        .replaceAll(RegExp(r'minSdkVersion\s+.*'), 'minSdkVersion 21')
+        .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 34')
+        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 34')
+        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 34')
+        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 34');
+    
+    // Fallback if not replaced
+    if (!text.contains('compileSdk')) {
+      text = text.replaceFirst('android {', 'android {\n    compileSdk = 34\n');
+    }
     file.writeAsStringSync(text);
   }
 }
@@ -157,7 +161,6 @@ void _patchPubCachePlugins() {
       var text = gradleFile.readAsStringSync();
       var modified = false;
 
-      // 1. Align Java 1_8 / 11 with Kotlin 17 in plugin build.gradle files
       final updatedJava = text
           .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
           .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17')
@@ -171,7 +174,6 @@ void _patchPubCachePlugins() {
         modified = true;
       }
 
-      // 2. Inject missing namespace from plugin's AndroidManifest.xml (e.g. on_audio_query_android)
       if (!text.contains('namespace')) {
         final manifestFile =
             File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');
@@ -190,19 +192,8 @@ void _patchPubCachePlugins() {
         }
       }
 
-      // 3. Ensure compileOptions uses Java 17 if missing inside on_audio_query_android
-      if (gradleFile.path.contains('on_audio_query') &&
-          !text.contains('compileOptions')) {
-        text = text.replaceFirst(
-          RegExp(r'android\s*\{'),
-          'android {\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_17\n        targetCompatibility JavaVersion.VERSION_17\n    }',
-        );
-        modified = true;
-      }
-
       if (modified) {
         gradleFile.writeAsStringSync(text);
-        print('Patched plugin gradle: ${gradleFile.path}');
       }
     }
   }

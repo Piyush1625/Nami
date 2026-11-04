@@ -128,9 +128,7 @@ void _patchRootGradleNamespaceFix() {
   if (groovy.existsSync()) {
     var text = groovy.readAsStringSync();
     text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
-    
-    const fix = '''
-
+    const fix = '''\n
 // namiNamespaceFix
 allprojects {
     tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
@@ -144,17 +142,50 @@ allprojects {
     }
 }
 subprojects {
-    project.plugins.whenPluginAdded { plugin ->
-        if (plugin.class.name.contains('AndroidPlugin')) {
-            project.android {
-                if (namespace == null) {
-                    namespace project.group.toString()
-                }
+    plugins.withId("com.android.library") {
+        project.android {
+            if (namespace == null) {
+                namespace project.group.toString()
             }
         }
     }
 }
 ''';
-    groovy.writeAsStringSync('$text\n$fix');
+    groovy.writeAsStringSync('$text$fix');
+  }
+
+  final kts = File('android/build.gradle.kts');
+  if (kts.existsSync()) {
+    var text = kts.readAsStringSync();
+    text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
+    const fix = '''\n
+// namiNamespaceFix
+allprojects {
+    tasks.withType<JavaCompile>().configureEach {
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+    }
+    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+}
+subprojects {
+    pluginManager.withPlugin("com.android.library") {
+        val androidExt = extensions.findByName("android")
+        if (androidExt != null) {
+            try {
+                val getNs = androidExt.javaClass.getMethod("getNamespace")
+                val setNs = androidExt.javaClass.getMethod("setNamespace", String::class.java)
+                if (getNs.invoke(androidExt) == null) {
+                    setNs.invoke(androidExt, project.group.toString())
+                }
+            } catch (e: Exception) {}
+        }
+    }
+}
+''';
+    kts.writeAsStringSync('$text$fix');
   }
 }

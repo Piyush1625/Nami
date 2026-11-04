@@ -95,7 +95,7 @@ class NamiApp extends StatelessWidget {
         amoled: settings.amoledBlack,
         liquidGlass: settings.liquidGlass,
       ),
-      home: const HomeShell(),
+      home: const NamidaLayout(),
     );
   }
 }

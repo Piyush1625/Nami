@@ -65,7 +65,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
   final TextEditingController _directUrlCtrl = TextEditingController();
   bool _loading = false;
   String? _status;
-  List> _results = [];
+  final _results = >[];
 
   Future<void> _importSflxFile() async {
     final picked = await FilePicker.platform.pickFiles(type: FileType.any);
@@ -86,7 +86,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
     setState(() {
       _loading = true;
       _status = null;
-      _results = [];
+      _results.clear();
     });
 
     final collected = >[];
@@ -99,14 +99,15 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
         final resp = await http.get(Uri.parse(searchUrl));
         if (resp.statusCode == 200) {
           final decoded = jsonDecode(resp.body);
-          List<dynamic> dynamicList = [];
-          if (decoded is List) {
+          Iterable dynamicList = const [];
+          
+          if (decoded is Iterable) {
             dynamicList = decoded;
           } else if (decoded is Map) {
-            if (decoded['results'] is List) {
-              dynamicList = decoded['results'] as List;
-            } else if (decoded['data'] is List) {
-              dynamicList = decoded['data'] as List;
+            if (decoded['results'] is Iterable) {
+              dynamicList = decoded['results'] as Iterable;
+            } else if (decoded['data'] is Iterable) {
+              dynamicList = decoded['data'] as Iterable;
             }
           }
           
@@ -124,7 +125,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
     if (mounted) {
       setState(() {
         _loading = false;
-        _results = collected;
+        _results.addAll(collected);
         if (collected.isEmpty) {
           _status = 'No results returned from loaded .sflx modules.';
         }

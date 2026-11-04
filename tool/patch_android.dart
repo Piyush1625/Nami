@@ -41,7 +41,7 @@ void main() {
   _patchAppGradle();
   _patchRootGradleJvmFix();
   _patchPubCachePlugins();
-  print('Android project and plugins fully patched for SDK 35 and Java 17.');
+  print('Android project and plugins fully patched for SDK 36 and Java 17.');
 }
 
 void _patchManifest(File file) {
@@ -115,13 +115,13 @@ void _patchAppGradle() {
     text = text
         .replaceAll(RegExp(r'minSdk\s*=?\s*.*'), 'minSdk = 21')
         .replaceAll(RegExp(r'minSdkVersion\s+.*'), 'minSdkVersion 21')
-        .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 35')
-        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 35')
-        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 35')
-        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 35');
+        .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 36')
+        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 36')
+        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 36')
+        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 36');
     
     if (!text.contains('compileSdk')) {
-      text = text.replaceFirst('android {', 'android {\n    compileSdk = 35\n');
+      text = text.replaceFirst('android {', 'android {\n    compileSdk = 36\n');
     }
     file.writeAsStringSync(text);
   }
@@ -169,12 +169,15 @@ void _patchPubCachePlugins() {
         .whereType<File>()
         .where((f) =>
             f.path.endsWith('/android/build.gradle') ||
-            f.path.endsWith(r'\android\build.gradle'));
+            f.path.endsWith('/android/build.gradle.kts') ||
+            f.path.endsWith(r'\android\build.gradle') ||
+            f.path.endsWith(r'\android\build.gradle.kts'));
 
     for (final gradleFile in buildFiles) {
       var text = gradleFile.readAsStringSync();
       var modified = false;
 
+      // Force Java 17 compatibility
       final updatedJava = text
           .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
           .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17')
@@ -188,6 +191,15 @@ void _patchPubCachePlugins() {
         modified = true;
       }
 
+      // Ensure compileSdk / targetSdk is at least 36 if defined in plugin
+      if (text.contains('compileSdkVersion') || text.contains('compileSdk')) {
+        text = text
+            .replaceAll(RegExp(r'compileSdk\s*=?\s*\d+'), 'compileSdk = 36')
+            .replaceAll(RegExp(r'compileSdkVersion\s+\d+'), 'compileSdkVersion 36');
+        modified = true;
+      }
+
+      // Inject namespace if missing
       if (!text.contains('namespace')) {
         final manifestFile =
             File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');

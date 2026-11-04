@@ -34,6 +34,7 @@ class PlayerService extends ChangeNotifier {
   final LyricsService lyricsService;
 
   late final AudioPlayer _player;
+  late ConcatenatingAudioSource _playlist;
   final AndroidEqualizer _equalizer = AndroidEqualizer();
   final AndroidLoudnessEnhancer _loudness = AndroidLoudnessEnhancer();
 
@@ -95,6 +96,7 @@ class PlayerService extends ChangeNotifier {
         androidAudioEffects: Platform.isAndroid ? [_equalizer, _loudness] : [],
       ),
     );
+    _playlist = ConcatenatingAudioSource(children: []);
 
     final session = await AudioSession.instance;
     await session.configure(const AudioSessionConfiguration.music());
@@ -187,8 +189,9 @@ class PlayerService extends ChangeNotifier {
         _currentIndex = startIndex.clamp(0, _entries.length - 1);
 
         final children = _entries.map(_toAudioSource).toList();
-        await _player.setAudioSources(
-          children,
+        _playlist = ConcatenatingAudioSource(children: children);
+        await _player.setAudioSource(
+          _playlist,
           initialIndex: _currentIndex,
           initialPosition: initialPosition,
         );
@@ -215,7 +218,7 @@ class PlayerService extends ChangeNotifier {
         final insertIdx = (_currentIndex + 1).clamp(0, _entries.length);
         final entry = QueueEntry(track);
         _entries.insert(insertIdx, entry);
-        await _player.insertAudioSource(insertIdx, _toAudioSource(entry));
+        await _playlist.insert(insertIdx, _toAudioSource(entry));
         notifyListeners();
         unawaited(_persistQueue());
       });
@@ -227,7 +230,7 @@ class PlayerService extends ChangeNotifier {
         }
         final entry = QueueEntry(track);
         _entries.add(entry);
-        await _player.addAudioSource(_toAudioSource(entry));
+        await _playlist.add(_toAudioSource(entry));
         notifyListeners();
         unawaited(_persistQueue());
       });
@@ -247,7 +250,7 @@ class PlayerService extends ChangeNotifier {
         } else if (index == _currentIndex && _currentIndex >= _entries.length) {
           _currentIndex = _entries.length - 1;
         }
-        await _player.removeAudioSourceAt(index);
+        await _playlist.removeAt(index);
         notifyListeners();
         unawaited(_persistQueue());
       });
@@ -270,7 +273,7 @@ class PlayerService extends ChangeNotifier {
           _currentIndex++;
         }
 
-        await _player.moveAudioSource(oldIndex, newIndex);
+        await _playlist.move(oldIndex, newIndex);
         notifyListeners();
         unawaited(_persistQueue());
       });

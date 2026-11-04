@@ -65,7 +65,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
   final TextEditingController _directUrlCtrl = TextEditingController();
   bool _loading = false;
   String? _status;
-  var _results = >[];
+  List> _results = [];
 
   Future<void> _importSflxFile() async {
     final picked = await FilePicker.platform.pickFiles(type: FileType.any);
@@ -99,9 +99,17 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
         final resp = await http.get(Uri.parse(searchUrl));
         if (resp.statusCode == 200) {
           final decoded = jsonDecode(resp.body);
-          final dynamicList = decoded is Iterable
-              ? decoded
-              : (decoded['results'] as Iterable? ?? decoded['data'] as Iterable? ?? []);
+          List<dynamic> dynamicList = [];
+          if (decoded is List) {
+            dynamicList = decoded;
+          } else if (decoded is Map) {
+            if (decoded['results'] is List) {
+              dynamicList = decoded['results'] as List;
+            } else if (decoded['data'] is List) {
+              dynamicList = decoded['data'] as List;
+            }
+          }
+          
           for (final item in dynamicList) {
             if (item is Map) {
               collected.add(Map<String, dynamic>.from(item));

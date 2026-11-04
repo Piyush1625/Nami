@@ -41,8 +41,8 @@ class NamidaLayout extends StatelessWidget {
                   padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                   child: Container(
                     decoration: BoxDecoration(
-                      color: Colors.white.withOpacity(0.05),
-                      border: Border.all(color: Colors.white.withOpacity(0.1), width: 1),
+                      color: Colors.white.withAlpha(13),
+                      border: Border.all(color: Colors.white.withAlpha(26), width: 1),
                       borderRadius: BorderRadius.circular(16),
                     ),
                     padding: const EdgeInsets.all(16),
@@ -60,12 +60,12 @@ class NamidaLayout extends StatelessWidget {
                         width: 48,
                         height: 48,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.1),
+                          color: Colors.white.withAlpha(26),
                           borderRadius: BorderRadius.circular(12), // Rounded chunky squares
                         ),
                       ),
                       title: Text('Track \$index', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-                      subtitle: Text('Artist', style: TextStyle(color: Colors.white.withOpacity(0.7))),
+                      subtitle: Text('Artist', style: TextStyle(color: Colors.white.withAlpha(179))),
                     );
                   },
                   childCount: 20,
@@ -83,7 +83,7 @@ class NamidaLayout extends StatelessWidget {
               borderRadius: BorderRadius.circular(24),
               child: Container(
                 height: 64,
-                color: Colors.white.withOpacity(0.1), // Translucent
+                color: Colors.white.withAlpha(26), // Translucent
                 // In a real app, wrap this Container with BackdropFilter for the blur!
                 child: const Center(
                   child: Text('Floating Player', style: TextStyle(color: Colors.white)),

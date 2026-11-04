@@ -1,5 +1,3 @@
-// ignore_for_file: avoid_print
-// ignore_for_file: avoid_print
 import 'dart:io';
 
 void main() {
@@ -8,7 +6,6 @@ void main() {
   var text = file.readAsStringSync();
   
   if (text.contains('namiErrorCatcher')) {
-    print('Already patched.');
     return;
   }
   
@@ -21,14 +18,11 @@ void main() {
   } else if (text.contains('void main() =>')) {
     text = text.replaceFirst('void main() =>', 'Future<void> namiOriginalMain() async =>');
   } else {
-    print('Could not find main function signature.');
     return;
   }
   
   text += '''\n
 // namiErrorCatcher
-import 'dart:async';
-
 void main() {
   runZonedGuarded(() async {
     try {
@@ -74,5 +68,4 @@ void main() {
 ''';
 
   file.writeAsStringSync(text);
-  print('main.dart successfully patched with global error catcher!');
 }

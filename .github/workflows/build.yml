@@ -30,7 +30,7 @@ jobs:
           bash scripts/setup.sh
 
       - name: Build Release APK
-        run: flutter build apk --release --split-per-abi
+        run: flutter build apk --debug --split-per-abi
 
       - name: Upload APK Artifacts
         uses: actions/upload-artifact@v4

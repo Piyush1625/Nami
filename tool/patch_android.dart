@@ -1,11 +1,9 @@
-// ignore_for_file: avoid_print
 import 'dart:io';
 
 void main() {
   _patchManifest();
   _patchAppGradle();
   _patchPubCache();
-  print('Nami Android patches applied: Removed legacy package attributes.');
 }
 
 void _patchManifest() {
@@ -48,47 +46,47 @@ void _patchPubCache() {
   if (!dir.existsSync()) return;
 
   for (final entity in dir.listSync(recursive: true, followLinks: false)) {
-    // 1. Strip the forbidden 'package' attribute from Manifests and inject into build.gradle
     if (entity is File && entity.path.endsWith('AndroidManifest.xml')) {
       var text = entity.readAsStringSync();
       final pkgMatch = RegExp(r'package\s*=\s*"([^"]+)"').firstMatch(text);
       if (pkgMatch != null) {
-        final pkg = pkgMatch.group(1)!;
-        // Strip package attribute to satisfy AGP 8
         entity.writeAsStringSync(text.replaceAll(pkgMatch.group(0)!, ''));
-        
-        // Inject namespace into the corresponding build.gradle
-        final gPath = entity.path.replaceAll('src/main/AndroidManifest.xml', 'build.gradle').replaceAll(r'src\main\AndroidManifest.xml', 'build.gradle');
+        final gPath = entity.path.replaceAll('src/main/AndroidManifest.xml', 'build.gradle');
         final gFile = File(gPath);
         if (gFile.existsSync()) {
           var gText = gFile.readAsStringSync();
           if (!gText.contains('namespace')) {
-            gFile.writeAsStringSync(gText.replaceFirst('android {', 'android {\n    namespace "$pkg"'));
+            gFile.writeAsStringSync(gText.replaceFirst('android {', 'android {\n    namespace "${pkgMatch.group(1)}"'));
           }
         }
       }
     }
-    
-    // 2. Force Java 17 compatibility
-    if (entity is File && entity.path.endsWith('build.gradle')) {
+
+    if (entity is File && (entity.path.endsWith('build.gradle') || entity.path.endsWith('build.gradle.kts'))) {
       var text = entity.readAsStringSync();
       var changed = false;
-      
+
+      // Restored: Force SDK 36 on plugins to resolve the file_picker conflict
+      if (text.contains('compileSdk')) {
+        text = text
+            .replaceAll(RegExp(r'compileSdk\s*=?\s*\d+'), 'compileSdk = 36')
+            .replaceAll(RegExp(r'compileSdkVersion\s+\d+'), 'compileSdkVersion 36');
+        changed = true;
+      }
+
       if (!text.contains('compileOptions') && text.contains('android {')) {
         text = text.replaceFirst('android {', 'android {\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_17\n        targetCompatibility JavaVersion.VERSION_17\n    }');
         changed = true;
       }
-      
-      if (text.contains('VERSION_1_8') || text.contains('VERSION_11') || text.contains("jvmTarget = '1.8'") || text.contains('jvmTarget = "11"')) {
+
+      if (text.contains('VERSION_1_8') || text.contains('VERSION_11') || text.contains('jvmTarget')) {
         text = text.replaceAll('VERSION_1_8', 'VERSION_17').replaceAll('VERSION_11', 'VERSION_17')
-            .replaceAll("jvmTarget = '1.8'", "jvmTarget = '17'").replaceAll('jvmTarget = "1.8"', 'jvmTarget = "17"')
-            .replaceAll("jvmTarget = '11'", "jvmTarget = '17'").replaceAll('jvmTarget = "11"', 'jvmTarget = "17"');
+            .replaceAll(RegExp(r'jvmTarget\s*=\s*["\u0027]1\.8["\u0027]'), "jvmTarget = '17'")
+            .replaceAll(RegExp(r'jvmTarget\s*=\s*["\u0027]11["\u0027]'), "jvmTarget = '17'");
         changed = true;
       }
-      
-      if (changed) {
-        entity.writeAsStringSync(text);
-      }
+
+      if (changed) entity.writeAsStringSync(text);
     }
   }
 }

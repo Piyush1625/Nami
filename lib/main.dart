@@ -12,7 +12,6 @@ import 'core/services/settings_service.dart';
 import 'core/services/user_data_service.dart';
 import 'extensions/extension_api.dart';
 import 'extensions/extension_manager.dart';
-import 'ui/screens/home_shell.dart';
 import 'ui/theme.dart';
 
 Future<void> main() async {

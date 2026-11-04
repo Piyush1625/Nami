@@ -39,9 +39,8 @@ void main() {
   _patchManifest(manifest);
   _patchMainActivity();
   _patchAppGradle();
-  _patchRootGradleJvmFix();
-  _patchPubCachePlugins();
-  print('Android project and plugins fully patched for SDK 36 and Java 17.');
+  _patchRootGradleLazyJvmFix();
+  print('Android project successfully patched for SDK 36 and lazy Java 17 enforcement.');
 }
 
 void _patchManifest(File file) {
@@ -127,16 +126,27 @@ void _patchAppGradle() {
   }
 }
 
-void _patchRootGradleJvmFix() {
-  for (final path in ['android/build.gradle', 'android/build.gradle.kts']) {
+void _patchRootGradleLazyJvmFix() {
+  for (final path in ['android/build.gradle.kts', 'android/build.gradle']) {
     final file = File(path);
     if (!file.existsSync()) continue;
     var text = file.readAsStringSync();
-    text = text.replaceAll(RegExp(r'// namiJvmFix[\s\S]*'), '').trim();
+    text = text.replaceAll(RegExp(r'// namiLazyJvmFix[\s\S]*'), '').trim();
     
-    const fix = '''\n
-// namiJvmFix
+    const fixKts = '''\n
+// namiLazyJvmFix
 allprojects {
+    afterEvaluate {
+        extensions.findByName("android")?.let { android ->
+            try {
+                val compileOptions = android.javaClass.getMethod("getCompileOptions").invoke(android)
+                compileOptions.javaClass.getMethod("getSourceCompatibility").invoke(compileOptions)
+                // Force Java 17 compatibility on all subprojects/plugins
+                compileOptions.javaClass.getMethod("setSourceCompatibility", JavaVersion::class.java).invoke(compileOptions, JavaVersion.VERSION_17)
+                compileOptions.javaClass.getMethod("setTargetCompatibility", JavaVersion::class.java).invoke(compileOptions, JavaVersion.VERSION_17)
+            } catch (_: Exception) {}
+        }
+    }
     tasks.withType(JavaCompile::class.java).configureEach {
         sourceCompatibility = "17"
         targetCompatibility = "17"
@@ -148,79 +158,7 @@ allprojects {
     }
 }
 ''';
-    file.writeAsStringSync('$text$fix');
-  }
-}
-
-void _patchPubCachePlugins() {
-  final env = Platform.environment;
-  final candidates = <String>[
-    if (env['PUB_CACHE'] != null) env['PUB_CACHE']!,
-    if (env['HOME'] != null) '${env['HOME']}/.pub-cache',
-    if (env['LOCALAPPDATA'] != null) '${env['LOCALAPPDATA']}/Pub/Cache',
-  ];
-
-  for (final rootPath in candidates) {
-    final dir = Directory(rootPath);
-    if (!dir.existsSync()) continue;
-
-    final buildFiles = dir
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .where((f) =>
-            f.path.endsWith('/android/build.gradle') ||
-            f.path.endsWith('/android/build.gradle.kts') ||
-            f.path.endsWith(r'\android\build.gradle') ||
-            f.path.endsWith(r'\android\build.gradle.kts'));
-
-    for (final gradleFile in buildFiles) {
-      var text = gradleFile.readAsStringSync();
-      var modified = false;
-
-      // Force Java 17 compatibility
-      final updatedJava = text
-          .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
-          .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17')
-          .replaceAll("jvmTarget = '1.8'", "jvmTarget = '17'")
-          .replaceAll('jvmTarget = "1.8"', 'jvmTarget = "17"')
-          .replaceAll("jvmTarget = '11'", "jvmTarget = '17'")
-          .replaceAll('jvmTarget = "11"', 'jvmTarget = "17"');
-
-      if (updatedJava != text) {
-        text = updatedJava;
-        modified = true;
-      }
-
-      // Ensure compileSdk / targetSdk is at least 36 if defined in plugin
-      if (text.contains('compileSdkVersion') || text.contains('compileSdk')) {
-        text = text
-            .replaceAll(RegExp(r'compileSdk\s*=?\s*\d+'), 'compileSdk = 36')
-            .replaceAll(RegExp(r'compileSdkVersion\s+\d+'), 'compileSdkVersion 36');
-        modified = true;
-      }
-
-      // Inject namespace if missing
-      if (!text.contains('namespace')) {
-        final manifestFile =
-            File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');
-        if (manifestFile.existsSync()) {
-          final manifestText = manifestFile.readAsStringSync();
-          final pkgMatch =
-              RegExp(r'package\s*=\s*"([^"]+)"').firstMatch(manifestText);
-          if (pkgMatch != null) {
-            final pkg = pkgMatch.group(1)!;
-            text = text.replaceFirst(
-              RegExp(r'android\s*\{'),
-              'android {\n    namespace "$pkg"',
-            );
-            modified = true;
-          }
-        }
-      }
-
-      if (modified) {
-        gradleFile.writeAsStringSync(text);
-      }
-    }
+    file.writeAsStringSync('$text$fixKts');
+    break; // Patch root build.gradle / build.gradle.kts once
   }
 }

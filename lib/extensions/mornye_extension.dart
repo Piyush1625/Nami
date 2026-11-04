@@ -65,7 +65,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
   final TextEditingController _directUrlCtrl = TextEditingController();
   bool _loading = false;
   String? _status;
-  final _results = >[];
+  var _results = []; 
 
   Future<void> _importSflxFile() async {
     final picked = await FilePicker.platform.pickFiles(type: FileType.any);
@@ -86,34 +86,37 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
     setState(() {
       _loading = true;
       _status = null;
-      _results.clear();
+      _results = [];
     });
 
-    final collected = >[];
+    var collected = [];
     for (final raw in widget.extContext.settings.sflxSources) {
       try {
-        final cfg = jsonDecode(raw) as Map<String, dynamic>;
-        final searchUrl = (cfg['searchUrl'] as String? ?? '')
+        final cfg = jsonDecode(raw);
+        final searchUrl = (cfg['searchUrl'] ?? '')
+            .toString()
             .replaceAll('{query}', Uri.encodeQueryComponent(query));
         if (searchUrl.isEmpty) continue;
         final resp = await http.get(Uri.parse(searchUrl));
         if (resp.statusCode == 200) {
           final decoded = jsonDecode(resp.body);
-          Iterable dynamicList = const [];
+          var items = [];
           
           if (decoded is Iterable) {
-            dynamicList = decoded;
+            items = decoded.toList();
           } else if (decoded is Map) {
-            if (decoded['results'] is Iterable) {
-              dynamicList = decoded['results'] as Iterable;
-            } else if (decoded['data'] is Iterable) {
-              dynamicList = decoded['data'] as Iterable;
+            var r = decoded['results'];
+            var d = decoded['data'];
+            if (r is Iterable) {
+              items = r.toList();
+            } else if (d is Iterable) {
+              items = d.toList();
             }
           }
           
-          for (final item in dynamicList) {
+          for (final item in items) {
             if (item is Map) {
-              collected.add(Map<String, dynamic>.from(item));
+              collected.add(item);
             }
           }
         }
@@ -125,7 +128,7 @@ class _MornyeHubScreenState extends State<MornyeHubScreen> {
     if (mounted) {
       setState(() {
         _loading = false;
-        _results.addAll(collected);
+        _results = collected;
         if (collected.isEmpty) {
           _status = 'No results returned from loaded .sflx modules.';
         }

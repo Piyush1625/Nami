@@ -1,5 +1,5 @@
-import 'namida_layout.dart';
 import 'package:flutter/material.dart';
+import 'ui/screens/home_shell.dart';
 import 'package:just_audio_background/just_audio_background.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -95,7 +95,7 @@ class NamiApp extends StatelessWidget {
         amoled: settings.amoledBlack,
         liquidGlass: settings.liquidGlass,
       ),
-      home: const NamidaLayout(),
+      home: const HomeShell(),
     );
   }
 }

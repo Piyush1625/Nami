@@ -39,8 +39,9 @@ void main() {
   _patchManifest(manifest);
   _patchMainActivity();
   _patchAppGradle();
-  _patchRootGradleNamespaceFix();
-  print('Android project patched for Nami.');
+  _cleanRootGradle();
+  _patchPubCachePlugins();
+  print('Android project and pub-cache plugins patched for Nami.');
 }
 
 void _patchManifest(File file) {
@@ -123,69 +124,86 @@ void _patchAppGradle() {
   }
 }
 
-void _patchRootGradleNamespaceFix() {
-  final groovy = File('android/build.gradle');
-  if (groovy.existsSync()) {
-    var text = groovy.readAsStringSync();
+void _cleanRootGradle() {
+  for (final path in ['android/build.gradle', 'android/build.gradle.kts']) {
+    final file = File(path);
+    if (!file.existsSync()) continue;
+    var text = file.readAsStringSync();
     text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
-    const fix = '''\n
-// namiNamespaceFix
-allprojects {
-    tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
-    }
-}
-subprojects {
-    plugins.withId("com.android.library") {
-        project.android {
-            if (namespace == null) {
-                namespace project.group.toString()
-            }
-        }
-    }
-}
-''';
-    groovy.writeAsStringSync('$text$fix');
+    file.writeAsStringSync('$text\n');
   }
+}
 
-  final kts = File('android/build.gradle.kts');
-  if (kts.existsSync()) {
-    var text = kts.readAsStringSync();
-    text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
-    const fix = '''\n
-// namiNamespaceFix
-allprojects {
-    tasks.withType<JavaCompile>().configureEach {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
-    }
-    tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
+void _patchPubCachePlugins() {
+  final env = Platform.environment;
+  final candidates = <String>[
+    if (env['PUB_CACHE'] != null) env['PUB_CACHE']!,
+    if (env['HOME'] != null) '${env['HOME']}/.pub-cache',
+    if (env['LOCALAPPDATA'] != null) '${env['LOCALAPPDATA']}/Pub/Cache',
+  ];
+
+  for (final rootPath in candidates) {
+    final dir = Directory(rootPath);
+    if (!dir.existsSync()) continue;
+
+    final buildFiles = dir
+        .listSync(recursive: true, followLinks: false)
+        .whereType<File>()
+        .where((f) =>
+            f.path.endsWith('/android/build.gradle') ||
+            f.path.endsWith(r'\android\build.gradle'));
+
+    for (final gradleFile in buildFiles) {
+      var text = gradleFile.readAsStringSync();
+      var modified = false;
+
+      // 1. Align Java 1_8 / 11 with Kotlin 17 in plugin build.gradle files
+      final updatedJava = text
+          .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
+          .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17')
+          .replaceAll("jvmTarget = '1.8'", "jvmTarget = '17'")
+          .replaceAll('jvmTarget = "1.8"', 'jvmTarget = "17"')
+          .replaceAll("jvmTarget = '11'", "jvmTarget = '17'")
+          .replaceAll('jvmTarget = "11"', 'jvmTarget = "17"');
+
+      if (updatedJava != text) {
+        text = updatedJava;
+        modified = true;
+      }
+
+      // 2. Inject missing namespace from plugin's AndroidManifest.xml (e.g. on_audio_query_android)
+      if (!text.contains('namespace')) {
+        final manifestFile =
+            File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');
+        if (manifestFile.existsSync()) {
+          final manifestText = manifestFile.readAsStringSync();
+          final pkgMatch =
+              RegExp(r'package\s*=\s*"([^"]+)"').firstMatch(manifestText);
+          if (pkgMatch != null) {
+            final pkg = pkgMatch.group(1)!;
+            text = text.replaceFirst(
+              RegExp(r'android\s*\{'),
+              'android {\n    namespace "$pkg"',
+            );
+            modified = true;
+          }
         }
+      }
+
+      // 3. Ensure compileOptions uses Java 17 if missing inside on_audio_query_android
+      if (gradleFile.path.contains('on_audio_query') &&
+          !text.contains('compileOptions')) {
+        text = text.replaceFirst(
+          RegExp(r'android\s*\{'),
+          'android {\n    compileOptions {\n        sourceCompatibility JavaVersion.VERSION_17\n        targetCompatibility JavaVersion.VERSION_17\n    }',
+        );
+        modified = true;
+      }
+
+      if (modified) {
+        gradleFile.writeAsStringSync(text);
+        print('Patched plugin gradle: ${gradleFile.path}');
+      }
     }
-}
-subprojects {
-    pluginManager.withPlugin("com.android.library") {
-        val androidExt = extensions.findByName("android")
-        if (androidExt != null) {
-            try {
-                val getNs = androidExt.javaClass.getMethod("getNamespace")
-                val setNs = androidExt.javaClass.getMethod("setNamespace", String::class.java)
-                if (getNs.invoke(androidExt) == null) {
-                    setNs.invoke(androidExt, project.group.toString())
-                }
-            } catch (e: Exception) {}
-        }
-    }
-}
-''';
-    kts.writeAsStringSync('$text$fix');
   }
 }

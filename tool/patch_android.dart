@@ -4,15 +4,29 @@ void main() {
   _patchManifest();
   _patchAppGradle();
   _patchPubCache();
+  _patchMainActivity();
 }
 
 void _patchManifest() {
   final file = File('android/app/src/main/AndroidManifest.xml');
   if (!file.existsSync()) return;
   var text = file.readAsStringSync();
+  
+  // Inject critical background audio permissions
+  if (!text.contains('FOREGROUND_SERVICE_MEDIA_PLAYBACK')) {
+    text = text.replaceFirst('<application', '''
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
+    <application''');
+  }
+
   if (!text.contains('requestLegacyExternalStorage')) {
     text = text.replaceFirst('<application', '<application\n    android:requestLegacyExternalStorage="true"');
   }
+  
   if (!text.contains('AudioService')) {
     text = text.replaceFirst('</application>', '''
         <service android:name="com.ryanheise.audioservice.AudioService" android:foregroundServiceType="mediaPlayback" android:exported="true">
@@ -24,6 +38,20 @@ void _patchManifest() {
     </application>''');
   }
   file.writeAsStringSync(text);
+}
+
+void _patchMainActivity() {
+  final dir = Directory('android/app/src/main');
+  if (!dir.existsSync()) return;
+  for (final entity in dir.listSync(recursive: true)) {
+    if (entity is File && (entity.path.endsWith('MainActivity.kt') || entity.path.endsWith('MainActivity.java'))) {
+      var text = entity.readAsStringSync();
+      // Replace FlutterActivity with AudioServiceActivity to prevent splash screen deadlock
+      text = text.replaceAll('io.flutter.embedding.android.FlutterActivity', 'com.ryanheise.audioservice.AudioServiceActivity');
+      text = text.replaceAll('FlutterActivity', 'AudioServiceActivity');
+      entity.writeAsStringSync(text);
+    }
+  }
 }
 
 void _patchAppGradle() {
@@ -66,7 +94,6 @@ void _patchPubCache() {
       var text = entity.readAsStringSync();
       var changed = false;
 
-      // Restored: Force SDK 36 on plugins to resolve the file_picker conflict
       if (text.contains('compileSdk')) {
         text = text
             .replaceAll(RegExp(r'compileSdk\s*=?\s*\d+'), 'compileSdk = 36')

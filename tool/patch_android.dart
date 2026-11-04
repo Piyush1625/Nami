@@ -39,8 +39,9 @@ void main() {
   _patchManifest(manifest);
   _patchMainActivity();
   _patchAppGradle();
-  _patchRootGradleCleanFix();
-  print('Android project successfully patched for SDK 36 and safe Java 17 configuration.');
+  _patchRootGradleJvmFix();
+  _patchPubCachePlugins();
+  print('Android project and pub-cache plugins fully patched for SDK 36, namespace, and Java 17.');
 }
 
 void _patchManifest(File file) {
@@ -126,15 +127,15 @@ void _patchAppGradle() {
   }
 }
 
-void _patchRootGradleCleanFix() {
+void _patchRootGradleJvmFix() {
   for (final path in ['android/build.gradle.kts', 'android/build.gradle']) {
     final file = File(path);
     if (!file.existsSync()) continue;
     var text = file.readAsStringSync();
-    text = text.replaceAll(RegExp(r'// namiLazyJvmFix[\s\S]*'), '').trim();
+    text = text.replaceAll(RegExp(r'// namiJvmFix[\s\S]*'), '').trim();
     
     const fixKts = '''\n
-// namiLazyJvmFix
+// namiJvmFix
 allprojects {
     tasks.withType(JavaCompile::class.java).configureEach {
         sourceCompatibility = "17"
@@ -149,5 +150,72 @@ allprojects {
 ''';
     file.writeAsStringSync('$text$fixKts');
     break;
+  }
+}
+
+void _patchPubCachePlugins() {
+  final env = Platform.environment;
+  final candidates = <String>[
+    if (env['PUB_CACHE'] != null) env['PUB_CACHE']!,
+    if (env['HOME'] != null) '${env['HOME']}/.pub-cache',
+    if (env['LOCALAPPDATA'] != null) '${env['LOCALAPPDATA']}/Pub/Cache',
+  ];
+
+  for (final rootPath in candidates) {
+    final dir = Directory(rootPath);
+    if (!dir.existsSync()) continue;
+
+    final buildFiles = dir
+        .listSync(recursive: true, followLinks: false)
+        .whereType<File>()
+        .where((f) =>
+            f.path.endsWith('/android/build.gradle') ||
+            f.path.endsWith('/android/build.gradle.kts') ||
+            f.path.endsWith(r'\android\build.gradle') ||
+            f.path.endsWith(r'\android\build.gradle.kts'));
+
+    for (final gradleFile in buildFiles) {
+      var text = gradleFile.readAsStringSync();
+      var modified = false;
+
+      // Ensure Java 17
+      if (text.contains('JavaVersion.')) {
+        text = text
+            .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
+            .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17');
+        modified = true;
+      }
+
+      // Inject namespace if missing (fixes on_audio_query_android)
+      if (!text.contains('namespace')) {
+        final manifestFile =
+            File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');
+        if (manifestFile.existsSync()) {
+          final manifestText = manifestFile.readAsStringSync();
+          final pkgMatch =
+              RegExp(r'package\s*=\s*"([^"]+)"').firstMatch(manifestText);
+          if (pkgMatch != null) {
+            final pkg = pkgMatch.group(1)!;
+            text = text.replaceFirst(
+              RegExp(r'android\s*\{'),
+              'android {\n    namespace "$pkg"',
+            );
+            modified = true;
+          }
+        }
+        // Fallback explicit namespace injection for on_audio_query_android if package attr is absent in manifest
+        if (!text.contains('namespace') && gradleFile.path.contains('on_audio_query')) {
+          text = text.replaceFirst(
+            RegExp(r'android\s*\{'),
+            'android {\n    namespace "com.lucasjosino.audio_query"',
+          );
+          modified = true;
+        }
+      }
+
+      if (modified) {
+        gradleFile.writeAsStringSync(text);
+      }
+    }
   }
 }

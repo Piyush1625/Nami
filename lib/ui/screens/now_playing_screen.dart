@@ -249,6 +249,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen> {
           return ReorderableListView.builder(
             padding: const EdgeInsets.symmetric(vertical: 12),
             itemCount: entries.length,
+            // ignore: deprecated_member_use
             onReorder: p.reorderQueue,
             itemBuilder: (context, i) {
               final e = entries[i];

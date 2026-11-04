@@ -1,220 +1,67 @@
 // ignore_for_file: avoid_print
 import 'dart:io';
 
-const _permissions = <String, String>{
-  'android.permission.INTERNET': '',
-  'android.permission.READ_MEDIA_AUDIO': '',
-  'android.permission.READ_EXTERNAL_STORAGE': ' android:maxSdkVersion="32"',
-  'android.permission.WRITE_EXTERNAL_STORAGE': ' android:maxSdkVersion="29"',
-  'android.permission.WAKE_LOCK': '',
-  'android.permission.FOREGROUND_SERVICE': '',
-  'android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK': '',
-  'android.permission.POST_NOTIFICATIONS': '',
-};
-
-const _serviceBlock = '''
-        <service
-            android:name="com.ryanheise.audioservice.AudioService"
-            android:foregroundServiceType="mediaPlayback"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.media.browse.MediaBrowserService" />
-            </intent-filter>
-        </service>
-        <receiver
-            android:name="com.ryanheise.audioservice.MediaButtonReceiver"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MEDIA_BUTTON" />
-            </intent-filter>
-        </receiver>
-    ''';
-
 void main() {
-  final manifest = File('android/app/src/main/AndroidManifest.xml');
-  if (!manifest.existsSync()) {
-    stderr.writeln('android/ folder not found. Run scripts/setup.sh first.');
-    exit(1);
-  }
-  _patchManifest(manifest);
-  _patchMainActivity();
+  _patchManifest();
   _patchAppGradle();
-  _patchRootGradleJvmFix();
-  _patchPubCachePlugins();
-  print('Android project and pub-cache plugins fully patched for SDK 36, namespace, and Java 17.');
+  _patchPubCache();
+  print('Nami Android patches applied successfully.');
 }
 
-void _patchManifest(File file) {
+void _patchManifest() {
+  final file = File('android/app/src/main/AndroidManifest.xml');
+  if (!file.existsSync()) return;
   var text = file.readAsStringSync();
-  final manifestTag = RegExp(r'<manifest[^>]*>').firstMatch(text);
-  if (manifestTag == null || !text.contains('</application>')) {
-    stderr.writeln('Unexpected AndroidManifest.xml layout.');
-    exit(1);
+  if (!text.contains('requestLegacyExternalStorage')) {
+    text = text.replaceFirst('<application', '<application\n    android:requestLegacyExternalStorage="true"');
   }
-
-  final permissionLines = StringBuffer();
-  _permissions.forEach((name, extra) {
-    if (!text.contains('"$name"')) {
-      permissionLines
-          .write('\n    <uses-permission android:name="$name"$extra />');
-    }
-  });
-  if (permissionLines.isNotEmpty) {
-    final tag = manifestTag.group(0)!;
-    text = text.replaceFirst(tag, '$tag${permissionLines.toString()}');
+  if (!text.contains('AudioService')) {
+    text = text.replaceFirst('</application>', '''
+        <service android:name="com.ryanheise.audioservice.AudioService" android:foregroundServiceType="mediaPlayback" android:exported="true">
+            <intent-filter><action android:name="android.media.browse.MediaBrowserService"/></intent-filter>
+        </service>
+        <receiver android:name="com.ryanheise.audioservice.MediaButtonReceiver" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MEDIA_BUTTON"/></intent-filter>
+        </receiver>
+    </application>''');
   }
-
-  if (!text.contains('android:requestLegacyExternalStorage="true"')) {
-    text = text.replaceFirst(
-      '<application',
-      '<application\n        android:requestLegacyExternalStorage="true"',
-    );
-  }
-
-  if (!text.contains('com.ryanheise.audioservice.AudioService')) {
-    text = text.replaceFirst(
-        '</application>', '$_serviceBlock</application>');
-  }
-
-  text = text.replaceFirst('android:label="nami"', 'android:label="Nami"');
   file.writeAsStringSync(text);
 }
 
-void _patchMainActivity() {
-  final root = Directory('android/app/src/main');
-  final files = root
-      .listSync(recursive: true)
-      .whereType<File>()
-      .where((f) =>
-          f.path.endsWith('MainActivity.kt') ||
-          f.path.endsWith('MainActivity.java'))
-      .toList();
-  if (files.isEmpty) {
-    stderr.writeln('MainActivity not found.');
-    exit(1);
-  }
-  for (final file in files) {
-    var text = file.readAsStringSync();
-    text = text.replaceAll(
-      'io.flutter.embedding.android.FlutterActivity',
-      'com.ryanheise.audioservice.AudioServiceActivity',
-    );
-    text = text.replaceAll('FlutterActivity', 'AudioServiceActivity');
-    file.writeAsStringSync(text);
-  }
-}
-
 void _patchAppGradle() {
-  for (final path in [
-    'android/app/build.gradle',
-    'android/app/build.gradle.kts',
-  ]) {
+  for (final path in ['android/app/build.gradle', 'android/app/build.gradle.kts']) {
     final file = File(path);
     if (!file.existsSync()) continue;
     var text = file.readAsStringSync();
     text = text
         .replaceAll(RegExp(r'minSdk\s*=?\s*.*'), 'minSdk = 21')
-        .replaceAll(RegExp(r'minSdkVersion\s+.*'), 'minSdkVersion 21')
         .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 36')
-        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 36')
-        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 36')
-        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 36');
-    
-    if (!text.contains('compileSdk')) {
-      text = text.replaceFirst('android {', 'android {\n    compileSdk = 36\n');
-    }
+        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 36');
     file.writeAsStringSync(text);
   }
 }
 
-void _patchRootGradleJvmFix() {
-  for (final path in ['android/build.gradle.kts', 'android/build.gradle']) {
-    final file = File(path);
-    if (!file.existsSync()) continue;
-    var text = file.readAsStringSync();
-    text = text.replaceAll(RegExp(r'// namiJvmFix[\s\S]*'), '').trim();
-    
-    const fixKts = '''\n
-// namiJvmFix
-allprojects {
-    tasks.withType(JavaCompile::class.java).configureEach {
-        sourceCompatibility = "17"
-        targetCompatibility = "17"
-    }
-    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {
-        compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        }
-    }
-}
-''';
-    file.writeAsStringSync('$text$fixKts');
-    break;
-  }
-}
+void _patchPubCache() {
+  final home = Platform.environment['HOME'];
+  if (home == null) return;
+  final dir = Directory('$home/.pub-cache');
+  if (!dir.existsSync()) return;
 
-void _patchPubCachePlugins() {
-  final env = Platform.environment;
-  final candidates = <String>[
-    if (env['PUB_CACHE'] != null) env['PUB_CACHE']!,
-    if (env['HOME'] != null) '${env['HOME']}/.pub-cache',
-    if (env['LOCALAPPDATA'] != null) '${env['LOCALAPPDATA']}/Pub/Cache',
-  ];
-
-  for (final rootPath in candidates) {
-    final dir = Directory(rootPath);
-    if (!dir.existsSync()) continue;
-
-    final buildFiles = dir
-        .listSync(recursive: true, followLinks: false)
-        .whereType<File>()
-        .where((f) =>
-            f.path.endsWith('/android/build.gradle') ||
-            f.path.endsWith('/android/build.gradle.kts') ||
-            f.path.endsWith(r'\android\build.gradle') ||
-            f.path.endsWith(r'\android\build.gradle.kts'));
-
-    for (final gradleFile in buildFiles) {
-      var text = gradleFile.readAsStringSync();
-      var modified = false;
-
-      // Ensure Java 17
-      if (text.contains('JavaVersion.')) {
-        text = text
-            .replaceAll('JavaVersion.VERSION_1_8', 'JavaVersion.VERSION_17')
-            .replaceAll('JavaVersion.VERSION_11', 'JavaVersion.VERSION_17');
-        modified = true;
+  for (final entity in dir.listSync(recursive: true, followLinks: false)) {
+    if (entity is File && entity.path.endsWith('build.gradle')) {
+      var text = entity.readAsStringSync();
+      var changed = false;
+      
+      if (!text.contains('namespace') && entity.path.contains('on_audio_query')) {
+        text = text.replaceFirst('android {', 'android {\n    namespace "com.lucasjosino.audio_query"');
+        changed = true;
       }
-
-      // Inject namespace if missing (fixes on_audio_query_android)
-      if (!text.contains('namespace')) {
-        final manifestFile =
-            File('${gradleFile.parent.path}/src/main/AndroidManifest.xml');
-        if (manifestFile.existsSync()) {
-          final manifestText = manifestFile.readAsStringSync();
-          final pkgMatch =
-              RegExp(r'package\s*=\s*"([^"]+)"').firstMatch(manifestText);
-          if (pkgMatch != null) {
-            final pkg = pkgMatch.group(1)!;
-            text = text.replaceFirst(
-              RegExp(r'android\s*\{'),
-              'android {\n    namespace "$pkg"',
-            );
-            modified = true;
-          }
-        }
-        // Fallback explicit namespace injection for on_audio_query_android if package attr is absent in manifest
-        if (!text.contains('namespace') && gradleFile.path.contains('on_audio_query')) {
-          text = text.replaceFirst(
-            RegExp(r'android\s*\{'),
-            'android {\n    namespace "com.lucasjosino.audio_query"',
-          );
-          modified = true;
-        }
+      if (text.contains('VERSION_1_8') || text.contains('VERSION_11')) {
+        text = text.replaceAll('VERSION_1_8', 'VERSION_17').replaceAll('VERSION_11', 'VERSION_17');
+        changed = true;
       }
-
-      if (modified) {
-        gradleFile.writeAsStringSync(text);
+      if (changed) {
+        entity.writeAsStringSync(text);
       }
     }
   }

@@ -127,10 +127,22 @@ void _patchRootGradleNamespaceFix() {
   final groovy = File('android/build.gradle');
   if (groovy.existsSync()) {
     var text = groovy.readAsStringSync();
-    if (!text.contains('namiNamespaceFix')) {
-      const fix = '''
+    text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
+    
+    const fix = '''
 
 // namiNamespaceFix
+allprojects {
+    tasks.withType(org.gradle.api.tasks.compile.JavaCompile).configureEach {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+        kotlinOptions {
+            jvmTarget = "17"
+        }
+    }
+}
 subprojects {
     project.plugins.whenPluginAdded { plugin ->
         if (plugin.class.name.contains('AndroidPlugin')) {
@@ -138,47 +150,11 @@ subprojects {
                 if (namespace == null) {
                     namespace project.group.toString()
                 }
-                compileOptions {
-                    sourceCompatibility JavaVersion.VERSION_17
-                    targetCompatibility JavaVersion.VERSION_17
-                }
             }
         }
     }
-    project.tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
-        kotlinOptions {
-            jvmTarget = "17"
-        }
-    }
 }
 ''';
-      groovy.writeAsStringSync('$text\n$fix');
-    }
-  }
-
-  final kts = File('android/build.gradle.kts');
-  if (kts.existsSync()) {
-    var text = kts.readAsStringSync();
-    if (!text.contains('namiNamespaceFix')) {
-      const fix = '''
-
-// namiNamespaceFix
-subprojects {
-    plugins.withId("com.android.library") {
-        val androidExt = extensions.findByName("android")
-        if (androidExt != null) {
-            try {
-                val getNs = androidExt.javaClass.getMethod("getNamespace")
-                val setNs = androidExt.javaClass.getMethod("setNamespace", String::class.java)
-                if (getNs.invoke(androidExt) == null) {
-                    setNs.invoke(androidExt, project.group.toString())
-                }
-            } catch (_: Exception) {}
-        }
-    }
-}
-''';
-      kts.writeAsStringSync('$text\n$fix');
-    }
+    groovy.writeAsStringSync('$text\n$fix');
   }
 }

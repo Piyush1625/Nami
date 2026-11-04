@@ -39,9 +39,9 @@ void main() {
   _patchManifest(manifest);
   _patchMainActivity();
   _patchAppGradle();
-  _cleanRootGradle();
+  _patchRootGradleJvmFix();
   _patchPubCachePlugins();
-  print('Android project and pub-cache plugins patched for Nami (SDK 34).');
+  print('Android project and plugins fully patched for SDK 35 and Java 17.');
 }
 
 void _patchManifest(File file) {
@@ -115,26 +115,40 @@ void _patchAppGradle() {
     text = text
         .replaceAll(RegExp(r'minSdk\s*=?\s*.*'), 'minSdk = 21')
         .replaceAll(RegExp(r'minSdkVersion\s+.*'), 'minSdkVersion 21')
-        .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 34')
-        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 34')
-        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 34')
-        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 34');
+        .replaceAll(RegExp(r'compileSdk\s*=?\s*.*'), 'compileSdk = 35')
+        .replaceAll(RegExp(r'compileSdkVersion\s+.*'), 'compileSdkVersion 35')
+        .replaceAll(RegExp(r'targetSdk\s*=?\s*.*'), 'targetSdk = 35')
+        .replaceAll(RegExp(r'targetSdkVersion\s+.*'), 'targetSdkVersion 35');
     
-    // Fallback if not replaced
     if (!text.contains('compileSdk')) {
-      text = text.replaceFirst('android {', 'android {\n    compileSdk = 34\n');
+      text = text.replaceFirst('android {', 'android {\n    compileSdk = 35\n');
     }
     file.writeAsStringSync(text);
   }
 }
 
-void _cleanRootGradle() {
+void _patchRootGradleJvmFix() {
   for (final path in ['android/build.gradle', 'android/build.gradle.kts']) {
     final file = File(path);
     if (!file.existsSync()) continue;
     var text = file.readAsStringSync();
-    text = text.replaceAll(RegExp(r'// namiNamespaceFix[\s\S]*'), '').trim();
-    file.writeAsStringSync('$text\n');
+    text = text.replaceAll(RegExp(r'// namiJvmFix[\s\S]*'), '').trim();
+    
+    const fix = '''\n
+// namiJvmFix
+allprojects {
+    tasks.withType(JavaCompile::class.java).configureEach {
+        sourceCompatibility = "17"
+        targetCompatibility = "17"
+    }
+    tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile::class.java).configureEach {
+        compilerOptions {
+            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        }
+    }
+}
+''';
+    file.writeAsStringSync('$text$fix');
   }
 }
 

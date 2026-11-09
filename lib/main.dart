@@ -82,6 +82,19 @@ class MornyeExtension {
   });
 }
 
+class MornyeSearchResult {
+  final String title;
+  final String artist;
+  final String album;
+  final String service;
+  MornyeSearchResult({
+    required this.title,
+    required this.artist,
+    required this.album,
+    required this.service,
+  });
+}
+
 class NamiHomeShell extends StatefulWidget {
   const NamiHomeShell({super.key});
 
@@ -109,13 +122,19 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
-  // Mornye Extension Search Controller & Results with Service Swapper & Filter Tabs
   final TextEditingController _mornyeSearchController = TextEditingController();
-  List> _mornyeSearchResults = [];
+  List<MornyeSearchResult> _mornyeSearchResults = [];
   bool _isMornyeSearching = false;
   String _selectedMornyeService = "Qobuz";
-  String _mornyeActiveFilter = "All"; // All, Songs, Albums, Artists
-  final List<String> _mornyeServices = ["Amazon Music", "Apple Music", "Qobuz", "Spotify Web", "Tidal", "YouTube Music"];
+  String _mornyeActiveFilter = "All";
+  final List<String> _mornyeServices = [
+    "Amazon Music",
+    "Apple Music",
+    "Qobuz",
+    "Spotify Web",
+    "Tidal",
+    "YouTube Music"
+  ];
 
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
@@ -123,9 +142,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   String _connectedDacName = "USB DAC Ready (Bit-Perfect)";
   String _topRecentFilter = "1 Day";
 
-  // User Profile
   String _userName = "Piyush";
-  Uint8List? _userAvatarBytes;
 
   final List<MornyeExtension> _extensions = [
     MornyeExtension(name: 'Tidal Hi-Res FLAC (.sflx)', version: '1.4.2', author: 'Mornye Core', format: '24-bit / 192kHz FLAC', isEnabled: true),
@@ -386,7 +403,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       final uri = Uri.parse('https://lrclib.net/api/get?track_name=${Uri.encodeComponent(song.title)}&artist_name=${Uri.encodeComponent(song.artist)}');
       final res = await http.get(uri).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
-        final json = jsonDecode(res.body);
+        final Map<String, dynamic> json = jsonDecode(res.body);
         song.lyrics = json['syncedLyrics'] ?? json['plainLyrics'] ?? "[00:00.00] Instrumental / No Lyrics found.";
       } else {
         song.lyrics = "[00:00.00] No lyrics available for this track.";
@@ -397,7 +414,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
-  // Improved Mornye Search with Service Swapper & Result Categories
   Future<void> _searchMornyeCatalog(String query) async {
     if (query.trim().isEmpty) {
       setState(() => _mornyeSearchResults = []);
@@ -408,16 +424,29 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       final uri = Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent(query)}');
       final res = await http.get(uri).timeout(const Duration(seconds: 6));
       if (res.statusCode == 200) {
-        final List list = jsonDecode(res.body);
-        setState(() {
-          _mornyeSearchResults = list.map>((item) => {
-            'title': item['trackName'] ?? 'Unknown Track',
-            'artist': item['artistName'] ?? 'Unknown Artist',
-            'album': item['albumName'] ?? 'Mornye Stream',
-            'service': _selectedMornyeService,
-          }).toList();
-          _isMornyeSearching = false;
-        });
+        final dynamic decoded = jsonDecode(res.body);
+        if (decoded is List) {
+          final List<MornyeSearchResult> results = [];
+          for (var item in decoded) {
+            if (item is Map) {
+              results.add(MornyeSearchResult(
+                title: item['trackName']?.toString() ?? 'Unknown Track',
+                artist: item['artistName']?.toString() ?? 'Unknown Artist',
+                album: item['albumName']?.toString() ?? 'Mornye Stream',
+                service: _selectedMornyeService,
+              ));
+            }
+          }
+          setState(() {
+            _mornyeSearchResults = results;
+            _isMornyeSearching = false;
+          });
+        } else {
+          setState(() {
+            _mornyeSearchResults = [];
+            _isMornyeSearching = false;
+          });
+        }
       } else {
         setState(() {
           _mornyeSearchResults = [];
@@ -528,7 +557,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Fully Functional Tag Editor Dialog
   void _showTagEditorDialog(AudioTrack song) {
     final titleController = TextEditingController(text: song.title);
     final artistController = TextEditingController(text: song.artist);
@@ -606,7 +634,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 Navigator.pop(context);
                 _showArtistDetailScreen(song.artist, _songs.where((s) => s.artist == song.artist).toList());
               }),
-              // Tappable Audio Path Viewer
               _buildMenuTile(Icons.folder_rounded, 'Audio Path', song.path, () {
                 Navigator.pop(context);
                 showDialog(
@@ -639,7 +666,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Detailed Artist Page with properly spaced Mini Player
   void _showArtistDetailScreen(String artistName, List<AudioTrack> artistTracks) {
     final firstArt = artistTracks.firstWhere((s) => s.albumArt != null, orElse: () => artistTracks.first).albumArt;
     
@@ -720,7 +746,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   )),
                 ],
               ),
-              // Properly positioned mini player above navigation
               Positioned(
                 left: 12,
                 right: 12,
@@ -912,7 +937,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
-      // 0. Namida Home Dashboard with Greeting Banner ("Happy Listening, Piyush")
+      // 0. Namida Home Dashboard with Greeting Banner
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
@@ -927,7 +952,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('Happy Listening,', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  const Text('Happy Listening,', style: TextStyle(fontSize: 12, color: Colors.grey)),
                   Text(_userName, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                 ],
               ),
@@ -1161,7 +1186,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 4. Mornye Tab with Service Swapper Dropdown & Filter Tabs
+      // 4. Mornye Tab with Streaming Service Dropdown & Results
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -1185,7 +1210,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         Text('Mornye Engine', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                       ],
                     ),
-                    // Streaming Service Swapper Dropdown
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                       decoration: BoxDecoration(color: const Color(0xFF0A0A0E), borderRadius: BorderRadius.circular(10)),
@@ -1220,7 +1244,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   ),
                 ),
                 const SizedBox(height: 12),
-                // Filter Tabs: All, Songs, Albums, Artists
                 Row(
                   children: ['All', 'Songs', 'Albums', 'Artists'].map((filter) {
                     final isSel = _mornyeActiveFilter == filter;
@@ -1250,16 +1273,16 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               margin: const EdgeInsets.symmetric(vertical: 4),
               child: ListTile(
                 leading: const Icon(Icons.cloud_download_rounded, color: Colors.deepPurpleAccent),
-                title: Text('${res['title']} - ${res['artist']}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-                subtitle: Text('Source: ${res['service']} • ${res['album']}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                title: Text('${res.title} - ${res.artist}', style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                subtitle: Text('Source: ${res.service} • ${res.album}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
                 trailing: IconButton(
                   icon: const Icon(Icons.download_rounded, color: Colors.deepPurpleAccent),
                   onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Downloading ${res['title']} via ${res['service']}...')));
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Downloading ${res.title} via ${res.service}...')));
                   },
                 ),
                 onTap: () {
-                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Streaming ${res['title']}')));
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Streaming ${res.title}')));
                 },
               ),
             )),
@@ -1476,7 +1499,6 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // Profile Name Section
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(16)),
@@ -1496,7 +1518,6 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          // USB DAC & Hi-Res Lossless Section
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(16)),
@@ -1658,7 +1679,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
             ),
           ),
           
-          // Merged Waveform & Seekbar
           StreamBuilder<Duration>(
             stream: widget.audioPlayer.positionStream,
             builder: (context, positionSnapshot) {

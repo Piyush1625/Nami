@@ -51,7 +51,7 @@ jobs:
             <uses-permission android:name="android.permission.WAKE_LOCK"/>' "$MANIFEST"
           fi
 
-      - name: Force compileSdk 36 in App & All Plugins (just_audio / audio_session / on_audio_query)
+      - name: Force compileSdk 36 Across App & All Plugins
         run: |
           # 1. Force compileSdk = 36 and minSdk = 24 in app/build.gradle.kts
           if [ -f "android/app/build.gradle.kts" ]; then
@@ -60,19 +60,47 @@ jobs:
             sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
           fi
 
-          # 2. Patch all plugin build.gradle files inside PUB_CACHE (both hardcoded numbers and flutter.compileSdkVersion)
-          CACHE_DIR="${PUB_CACHE:-$HOME/.pub-cache}"
-          echo "Patching plugins in: $CACHE_DIR"
-          find "$CACHE_DIR" -name "build.gradle*" -type f -exec sed -i -E \
-            -e 's/compileSdkVersion[[:space:]]+[0-9]+/compileSdkVersion 36/g' \
-            -e 's/compileSdkVersion[[:space:]]+flutter\.compileSdkVersion/compileSdkVersion 36/g' \
-            -e 's/compileSdk[[:space:]]*=[[:space:]]*[0-9]+/compileSdk = 36/g' \
-            -e 's/compileSdk[[:space:]]*=[[:space:]]*flutter\.compileSdkVersion/compileSdk = 36/g' {} +
+          # 2. Rewrite android/build.gradle.kts so plugins.withId runs BEFORE evaluationDependsOn(":app")
+          cat << 'KTS_EOF' > android/build.gradle.kts
+          allprojects {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
 
-          # 3. Also set flutter.compileSdkVersion=36 in local.properties so any plugin reading Flutter's default gets 36
-          echo "flutter.compileSdkVersion=36" >> android/local.properties
-          echo "flutter.targetSdkVersion=35" >> android/local.properties
-          echo "flutter.minSdkVersion=24" >> android/local.properties
+          val newBuildDir: Directory = rootProject.layout.buildDirectory.dir("../../build").get()
+          rootProject.layout.buildDirectory.value(newBuildDir)
+
+          subprojects {
+              val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
+              project.layout.buildDirectory.value(newSubprojectBuildDir)
+
+              // Force compileSdk 36 as soon as the Android plugin is applied (no afterEvaluate needed!)
+              plugins.withId("com.android.library") {
+                  extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+                      compileSdk = 36
+                      defaultConfig {
+                          minSdk = 24
+                      }
+                  }
+              }
+          }
+
+          subprojects {
+              project.evaluationDependsOn(":app")
+          }
+
+          tasks.register<Delete>("clean") {
+              delete(rootProject.layout.buildDirectory)
+          }
+          KTS_EOF
+
+          # 3. Also replace any whole-line compileSdk / compileSdkVersion inside pub-cache plugins (including just_audio's ?: 34)
+          CACHE_DIR="${PUB_CACHE:-$HOME/.pub-cache}"
+          find "$CACHE_DIR" -name "build.gradle*" -type f -exec sed -i -E \
+            -e 's/^[[:space:]]*compileSdkVersion[[:space:]].*/        compileSdkVersion 36/g' \
+            -e 's/^[[:space:]]*compileSdk[[:space:]]*=.*/        compileSdk = 36/g' {} +
 
       - name: Build Universal Release APK
         run: flutter build apk --release --no-tree-shake-icons

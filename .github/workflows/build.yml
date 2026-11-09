@@ -28,7 +28,7 @@ jobs:
           channel: 'stable'
           cache: true
 
-      - name: Generate Android Platform Files (if not present)
+      - name: Generate Android Platform Files
         run: |
           if [ ! -d "android" ]; then
             flutter create --platforms=android --org com.piyush.nami --project-name nami .
@@ -48,10 +48,58 @@ jobs:
             <uses-permission android:name="android.permission.WAKE_LOCK"/>' "$MANIFEST"
           fi
 
+      - name: Force compileSdk 36 & Namespace Across All Plugins
+        run: |
+          # 1. Upgrade app-level compileSdk and minSdk (handles both Groovy and Kotlin DSL)
+          if [ -f "android/app/build.gradle.kts" ]; then
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle.kts
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
+          elif [ -f "android/app/build.gradle" ]; then
+            sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/g' android/app/build.gradle
+            sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 36/g' android/app/build.gradle
+            sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle
+            sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle
+          fi
+
+          # 2. Force all subprojects/plugins (like on_audio_query_android_v1_8) to compile against SDK 36
+          if [ -f "android/build.gradle.kts" ]; then
+            cat << 'GRADLE_EOF' >> android/build.gradle.kts
+
+          subprojects {
+              afterEvaluate {
+                  if (extensions.findByName("android") != null) {
+                      extensions.configure<com.android.build.gradle.BaseExtension>("android") {
+                          compileSdkVersion(36)
+                          defaultConfig {
+                              minSdk = 24
+                          }
+                      }
+                  }
+              }
+          }
+          GRADLE_EOF
+          elif [ -f "android/build.gradle" ]; then
+            cat << 'GRADLE_EOF' >> android/build.gradle
+
+          subprojects {
+              afterEvaluate { project ->
+                  if (project.hasProperty("android")) {
+                      project.android {
+                          compileSdkVersion 36
+                          defaultConfig {
+                              minSdkVersion 24
+                          }
+                      }
+                  }
+              }
+          }
+          GRADLE_EOF
+          fi
+
       - name: Install Flutter Dependencies
         run: flutter pub get
 
-      - name: Build Split-per-ABI & Universal Release APK
+      - name: Build Universal Release APK
         run: flutter build apk --release --no-tree-shake-icons
 
       - name: Upload APK to Workflow Artifacts

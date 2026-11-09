@@ -44,6 +44,8 @@ class AudioTrack {
   String lyrics;
   bool isMetadataLoaded;
   Duration duration;
+  bool isFavorite;
+  String addedDate;
 
   AudioTrack({
     required this.title,
@@ -53,7 +55,9 @@ class AudioTrack {
     this.albumArt,
     this.lyrics = "[00:00.00] Nami Lossless Hi-Fi Engine\n[00:04.00] Synced Lyrics Active\n[00:08.00] Enjoy your music stream",
     this.isMetadataLoaded = false,
-    this.duration = Duration.zero,
+    this.duration = const Duration(minutes: 3, seconds: 45),
+    this.isFavorite = false,
+    this.addedDate = "Aug 2025",
   });
 }
 
@@ -113,6 +117,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
   String _connectedDacName = "USB DAC Ready (Bit-Perfect)";
+  String _topRecentFilter = "1 Day";
 
   final List<MornyeExtension> _extensions = [
     MornyeExtension(name: 'Tidal Hi-Res FLAC (.sflx)', version: '1.4.2', author: 'Mornye Core', format: '24-bit / 192kHz FLAC', isEnabled: true),
@@ -384,7 +389,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
-  // Mornye Extension Song Search (Queries LRCLIB / online catalogs via .sflx runtime)
   Future<void> _searchMornyeCatalog(String query) async {
     if (query.trim().isEmpty) {
       setState(() => _mornyeSearchResults = []);
@@ -452,6 +456,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (_filteredSongs.isNotEmpty && _currentSong != null) {
       int prevIdx = (_filteredSongs.indexOf(_currentSong!) - 1 + _filteredSongs.length) % _filteredSongs.length;
       _playSong(_filteredSongs[prevIdx]);
+    }
+  }
+
+  void _shufflePlay() {
+    if (_songs.isNotEmpty) {
+      List<AudioTrack> shuffled = List.from(_songs)..shuffle();
+      _playSong(shuffled.first);
     }
   }
 
@@ -536,7 +547,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               }),
               _buildMenuTile(Icons.person_rounded, 'Go to Artist', song.artist, () {
                 Navigator.pop(context);
-                _showFilteredListScreen('Artist: ${song.artist}', _songs.where((s) => s.artist == song.artist).toList());
+                _showArtistDetailScreen(song.artist, _songs.where((s) => s.artist == song.artist).toList());
               }),
               _buildMenuTile(Icons.folder_rounded, 'Go to Folder', song.path, () {
                 Navigator.pop(context);
@@ -567,6 +578,118 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           ),
         );
       },
+    );
+  }
+
+  // Namida-style Detailed Artist Page
+  void _showArtistDetailScreen(String artistName, List<AudioTrack> artistTracks) {
+    final firstArt = artistTracks.firstWhere((s) => s.albumArt != null, orElse: () => artistTracks.first).albumArt;
+    
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            actions: [
+              IconButton(icon: const Icon(Icons.search_rounded), onPressed: () {}),
+              IconButton(icon: const Icon(Icons.photo_library_outlined), onPressed: () {}),
+              IconButton(icon: const Icon(Icons.more_vert_rounded), onPressed: () {}),
+            ],
+          ),
+          body: ListView(
+            padding: const EdgeInsets.all(16),
+            children: [
+              Center(
+                child: Column(
+                  children: [
+                    CircleAvatar(
+                      radius: 54,
+                      backgroundColor: Colors.deepPurple.withOpacity(0.3),
+                      backgroundImage: firstArt != null ? MemoryImage(firstArt) : null,
+                      child: firstArt == null ? const Icon(Icons.person_rounded, size: 50, color: Colors.deepPurpleAccent) : null,
+                    ),
+                    const SizedBox(height: 14),
+                    Text(artistName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 4),
+                    const Text('2018 – 2026', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 20),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  _artistActionButton(Icons.shuffle_rounded, 'Shuffle', _shufflePlay),
+                  _artistActionButton(Icons.play_arrow_rounded, 'Play', () { if (artistTracks.isNotEmpty) _playSong(artistTracks.first); }),
+                  _artistActionButton(Icons.radio_rounded, 'Radio', () {}),
+                  _artistActionButton(Icons.more_horiz_rounded, 'More', () {}),
+                ],
+              ),
+              const SizedBox(height: 24),
+              _artistCategoryCard(Icons.album_rounded, 'Albums: 3'),
+              const SizedBox(height: 12),
+              _artistCategoryCard(Icons.library_music_rounded, 'Singles: ${artistTracks.length}'),
+              const SizedBox(height: 24),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.between,
+                children: [
+                  Text('${artistTracks.length} Tracks - 30min', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                  const Row(children: [Text('Year ', style: TextStyle(color: Colors.grey, fontSize: 13)), Icon(Icons.arrow_drop_down, color: Colors.grey)]),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ...artistTracks.map((song) => ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: _buildCoverArt(song, 48, 8),
+                title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+                subtitle: Text('${song.artist} • ${song.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 20),
+                      onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
+                    ),
+                    IconButton(icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 20), onPressed: () => _showActionMenu(song)),
+                  ],
+                ),
+                onTap: () => _playSong(song),
+              )),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _artistActionButton(IconData icon, String label, VoidCallback onTap) {
+    return Column(
+      children: [
+        CircleAvatar(
+          radius: 24,
+          backgroundColor: Colors.white.withOpacity(0.06),
+          child: Icon(icon, color: Colors.white, size: 22),
+        ),
+        const SizedBox(height: 6),
+        Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+      ],
+    );
+  }
+
+  Widget _artistCategoryCard(IconData icon, String title) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(14)),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(children: [Icon(icon, color: Colors.deepPurpleAccent, size: 22), const SizedBox(width: 14), Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14))]),
+          const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+        ],
+      ),
     );
   }
 
@@ -686,44 +809,49 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
-      // 0. Home Feed
+      // 0. Namida Home Dashboard
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
           const Text('Mixes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           SizedBox(
-            height: 180,
+            height: 170,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
                 GestureDetector(
                   onTap: () { if (_songs.isNotEmpty) _playSong(_songs.first); },
-                  child: _buildMixCard('Recommended', '${_songs.length} Local Tracks', Colors.deepPurple),
+                  child: _buildHomeCard(_songs.isNotEmpty ? _songs.first.albumArt : null, 'Recommended', '${_songs.length} Local Tracks'),
                 ),
                 GestureDetector(
                   onTap: () => _toggleUsbDacMode(!_usbDacExclusive),
-                  child: _buildMixCard(_usbDacExclusive ? 'USB DAC Active' : 'Standard Output', _connectedDacName, Colors.purpleAccent),
+                  child: _buildHomeCard(null, _usbDacExclusive ? 'Hi-Fi Lossless' : 'Standard Audio', _connectedDacName),
                 ),
               ],
             ),
           ),
           const SizedBox(height: 24),
-          const Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.between,
+            children: [
+              const Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+            ],
+          ),
           const SizedBox(height: 12),
           if (_isScanning)
             const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
           else
             SizedBox(
-              height: 145,
+              height: 140,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
-                itemCount: _songs.length > 10 ? 10 : _songs.length,
+                itemCount: _songs.length > 8 ? 8 : _songs.length,
                 itemBuilder: (context, index) {
                   final song = _songs[index];
                   return GestureDetector(
                     onTap: () => _playSong(song),
-                    onLongPress: () => _showActionMenu(song),
                     child: Container(
                       width: 110,
                       margin: const EdgeInsets.only(right: 12),
@@ -733,7 +861,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                           _buildCoverArt(song, 100, 12),
                           const SizedBox(height: 6),
                           Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.grey)),
+                          const Text('an hour ago', style: TextStyle(fontSize: 10, color: Colors.grey)),
                         ],
                       ),
                     ),
@@ -741,44 +869,135 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 },
               ),
             ),
+          const SizedBox(height: 24),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.between,
+            children: [
+              const Text('Top Recents', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            height: 38,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: ['1 Day', '3 Days', '6 Days', '9 Days', '12 Days', '15 Days'].map((filter) {
+                final isSelected = _topRecentFilter == filter;
+                return Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: ChoiceChip(
+                    label: Text(filter, style: TextStyle(fontSize: 12, color: isSelected ? Colors.white : Colors.grey)),
+                    selected: isSelected,
+                    selectedColor: Colors.deepPurple,
+                    backgroundColor: const Color(0xFF14141F),
+                    onSelected: (val) => setState(() => _topRecentFilter = filter),
+                  ),
+                );
+              }).toList(),
+            ),
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 140,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _songs.length > 5 ? 5 : _songs.length,
+              itemBuilder: (context, index) {
+                final song = _songs[index];
+                return GestureDetector(
+                  onTap: () => _playSong(song),
+                  child: Container(
+                    width: 110,
+                    margin: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _buildCoverArt(song, 100, 12),
+                        const SizedBox(height: 6),
+                        Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
         ],
       ),
 
-      // 1. Tracks Page (Runtime shown before 3-dots)
+      // 1. Tracks Page (Track Count on Top, Shuffle, Favorite & Runtime)
       _hasPermission
           ? (_isScanning 
               ? const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
               : (_filteredSongs.isEmpty
                   ? const Center(child: Text('No tracks found.', style: TextStyle(color: Colors.grey)))
-                  : ListView.builder(
-                      padding: const EdgeInsets.only(bottom: 90),
-                      itemCount: _filteredSongs.length,
-                      itemBuilder: (context, index) {
-                        final song = _filteredSongs[index];
-                        final isCurrent = _currentSong?.path == song.path;
-                        return ListTile(
-                          leading: _buildCoverArt(song, 48, 8),
-                          title: Text(
-                            song.title,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
-                          ),
-                          subtitle: Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
+                  : Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                          child: Row(
                             children: [
-                              Text(song.duration > Duration.zero ? _formatDuration(song.duration) : '03:45', style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                              IconButton(
-                                icon: const Icon(Icons.more_vert_rounded, color: Colors.grey),
-                                onPressed: () => _showActionMenu(song),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(16)),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.music_note, size: 14, color: Colors.deepPurpleAccent),
+                                    const SizedBox(width: 6),
+                                    Text('${_songs.length} Tracks', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                                    const Icon(Icons.chevron_right, size: 16, color: Colors.grey),
+                                  ],
+                                ),
+                              ),
+                              const Spacer(),
+                              IconButton(icon: const Icon(Icons.shuffle, size: 20, color: Colors.grey), onPressed: _shufflePlay),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(16)),
+                                child: const Row(children: [Text('Title', style: TextStyle(fontSize: 12, color: Colors.grey)), Icon(Icons.arrow_drop_down, size: 16, color: Colors.grey)]),
                               ),
                             ],
                           ),
-                          onTap: () => _playSong(song),
-                          onLongPress: () => _showActionMenu(song),
-                        );
-                      },
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            padding: const EdgeInsets.only(bottom: 90),
+                            itemCount: _filteredSongs.length,
+                            itemBuilder: (context, index) {
+                              final song = _filteredSongs[index];
+                              final isCurrent = _currentSong?.path == song.path;
+                              return ListTile(
+                                leading: _buildCoverArt(song, 48, 8),
+                                title: Text(
+                                  song.title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
+                                ),
+                                subtitle: Text('${song.artist} • ${song.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                    const SizedBox(width: 8),
+                                    IconButton(
+                                      icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 20),
+                                      onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 20),
+                                      onPressed: () => _showActionMenu(song),
+                                    ),
+                                  ],
+                                ),
+                                onTap: () => _playSong(song),
+                                onLongPress: () => _showActionMenu(song),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
                     )))
           : Center(
               child: ElevatedButton(
@@ -799,7 +1018,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           final firstArt = artistSongs.firstWhere((s) => s.albumArt != null, orElse: () => artistSongs.first).albumArt;
 
           return GestureDetector(
-            onTap: () => _showFilteredListScreen('Artist: $artistName', artistSongs),
+            onTap: () => _showArtistDetailScreen(artistName, artistSongs),
             child: Column(
               children: [
                 CircleAvatar(
@@ -844,7 +1063,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           const SizedBox(height: 12),
           Row(
             children: [
-              _buildPlaylistStatCard('Favourites', '${_songs.length > 5 ? 5 : _songs.length}', Icons.favorite),
+              _buildPlaylistStatCard('Favourites', '${_songs.where((s) => s.isFavorite).length}', Icons.favorite),
               const SizedBox(width: 12),
               _buildPlaylistStatCard('Queue', '${_songs.length}', Icons.queue_music),
             ],
@@ -1034,19 +1253,21 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  Widget _buildMixCard(String title, String subtitle, Color color) {
+  Widget _buildHomeCard(Uint8List? art, String title, String subtitle) {
     return Container(
-      width: 165,
+      width: 160,
       margin: const EdgeInsets.only(right: 12),
       padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
+      decoration: BoxDecoration(
+        color: Colors.deepPurple.withOpacity(0.25),
+        borderRadius: BorderRadius.circular(16),
+        image: art != null ? DecorationImage(image: MemoryImage(art), fit: BoxFit.cover, opacity: 0.3) : null,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Icon(Icons.album_rounded, size: 40, color: color),
-          const SizedBox(height: 12),
-          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
           const SizedBox(height: 4),
           Text(subtitle, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
         ],
@@ -1180,7 +1401,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye
+  int _viewMode = 0; // 0 = Cover Art + Waveform Seekbar, 1 = Synced Lyrics, 2 = Mornye
 
   @override
   Widget build(BuildContext context) {
@@ -1253,6 +1474,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
             ),
           ),
           
+          // Waveform Visualizer Seekbar Stream
           StreamBuilder<Duration>(
             stream: widget.audioPlayer.positionStream,
             builder: (context, positionSnapshot) {
@@ -1268,6 +1490,27 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
                   return Column(
                     children: [
+                      // Custom Waveform Bar Representation
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: List.generate(36, (i) {
+                            final heights = [12.0, 24.0, 36.0, 18.0, 30.0, 42.0, 15.0, 28.0, 38.0, 20.0];
+                            final h = heights[i % heights.length];
+                            final progress = currentMs / maxMs;
+                            final isPassed = (i / 36.0) <= progress;
+                            return Container(
+                              width: 4,
+                              height: h,
+                              decoration: BoxDecoration(
+                                color: isPassed ? Colors.deepPurpleAccent : Colors.white24,
+                                borderRadius: BorderRadius.circular(2),
+                              ),
+                            );
+                          }),
+                        ),
+                      ),
                       Slider(
                         activeColor: Colors.deepPurpleAccent,
                         inactiveColor: Colors.white12,

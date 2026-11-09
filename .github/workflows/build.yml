@@ -51,7 +51,7 @@ jobs:
             <uses-permission android:name="android.permission.WAKE_LOCK"/>' "$MANIFEST"
           fi
 
-      - name: Force compileSdk 36 in App & All Plugins
+      - name: Force compileSdk 36 in App & All Plugins (Groovy & KTS safe)
         run: |
           # 1. Force compileSdk = 36 and minSdk = 24 in app/build.gradle.kts
           if [ -f "android/app/build.gradle.kts" ]; then
@@ -60,13 +60,18 @@ jobs:
             sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
           fi
 
-          # 2. Patch every plugin build.gradle across the entire runner (handles `compileSdk 34`, `compileSdk = 34`, `compileSdkVersion 34`)
+          # 2. Patch every plugin build.gradle / build.gradle.kts across pub-cache with correct syntax
           find / -name "build.gradle*" -path "*pub-cache*" 2>/dev/null | while read -r gradle_file; do
-            echo "Patching $gradle_file"
-            sed -i -E 's/^[[:space:]]*compileSdk(Version)?[[:space:]=(].*/        compileSdkVersion 36/g' "$gradle_file"
+            if [[ "$gradle_file" == *.kts ]]; then
+              echo "Patching KTS: $gradle_file"
+              sed -i -E 's/^[[:space:]]*compileSdk(Version)?[[:space:]=(].*/    compileSdk = 36/g' "$gradle_file"
+            else
+              echo "Patching Groovy: $gradle_file"
+              sed -i -E 's/^[[:space:]]*compileSdk(Version)?[[:space:]=(].*/        compileSdkVersion 36/g' "$gradle_file"
+            fi
           done
 
-          # 3. Safe Gradle override in android/build.gradle.kts (checks project.state.executed so afterEvaluate never crashes)
+          # 3. Safe Gradle override in android/build.gradle.kts
           cat << 'KTS_EOF' > android/build.gradle.kts
           allprojects {
               repositories {

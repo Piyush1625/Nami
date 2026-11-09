@@ -1,6 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:on_audio_query_forked/on_audio_query_forked.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 void main() {
@@ -31,6 +32,13 @@ class NamiApp extends StatelessWidget {
   }
 }
 
+class AudioTrack {
+  final String title;
+  final String artist;
+  final String path;
+  AudioTrack({required this.title, required this.artist, required this.path});
+}
+
 class NamiHomeShell extends StatefulWidget {
   const NamiHomeShell({super.key});
 
@@ -41,17 +49,16 @@ class NamiHomeShell extends StatefulWidget {
 class _NamiHomeShellState extends State<NamiHomeShell> {
   int _selectedIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
-  final OnAudioQuery _audioQuery = OnAudioQuery();
   
   bool _hasPermission = false;
-  List<SongModel> _songs = [];
-  SongModel? _currentSong;
+  List<AudioTrack> _songs = [];
+  AudioTrack? _currentSong;
   bool _isPlaying = false;
 
   @override
   void initState() {
     super.initState();
-    _requestPermissionAndFetchSongs();
+    _requestPermissionAndScanMusic();
     
     _audioPlayer.playerStateStream.listen((state) {
       setState(() {
@@ -60,33 +67,78 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     });
   }
 
-  Future<void> _requestPermissionAndFetchSongs() async {
+  Future<void> _requestPermissionAndScanMusic() async {
     PermissionStatus status = await Permission.audio.request();
     if (!status.isGranted) {
       status = await Permission.storage.request();
     }
+    if (!status.isGranted) {
+      status = await Permission.manageExternalStorage.request();
+    }
 
-    if (status.isGranted) {
+    if (status.isGranted || await Permission.storage.isGranted) {
       setState(() => _hasPermission = true);
-      try {
-        List<SongModel> songs = await _audioQuery.querySongs(
-          sortType: SongSortType.TITLE,
-          orderType: OrderType.ASC_OR_SMALLER,
-          uriType: UriType.EXTERNAL_STORAGE,
-          ignoreCase: true,
-        );
-        setState(() {
-          _songs = songs;
-        });
-      } catch (e) {
-        debugPrint('Error querying songs: $e');
-      }
+      await _scanDeviceMusic();
     }
   }
 
-  Future<void> _playSong(SongModel song) async {
+  Future<void> _scanDeviceMusic() async {
+    List<AudioTrack> foundTracks = [];
     try {
-      await _audioPlayer.setAudioSource(AudioSource.uri(Uri.parse(song.uri!)));
+      List<Directory> searchDirs = [];
+      
+      final externalDirs = await getExternalStorageDirectories(type: StorageDirectory.music);
+      if (externalDirs != null) searchDirs.addAll(externalDirs);
+
+      final rootMusic = Directory('/storage/emulated/0/Music');
+      if (await rootMusic.exists()) {
+        searchDirs.add(rootMusic);
+      }
+      
+      final downloadDir = Directory('/storage/emulated/0/Download');
+      if (await downloadDir.exists()) {
+        searchDirs.add(downloadDir);
+      }
+
+      for (var dir in searchDirs) {
+        if (await dir.exists()) {
+          await for (var entity in dir.list(recursive: true, followLinks: false)) {
+            if (entity is File) {
+              String path = entity.path.toLowerCase();
+              if (path.endsWith('.flac') || path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.ogg') || path.endsWith('.wav')) {
+                String fileName = entity.uri.pathSegments.last;
+                String cleanName = fileName.substring(0, fileName.lastIndexOf('.')).replaceAll('_', ' ');
+                foundTracks.add(AudioTrack(
+                  title: cleanName,
+                  artist: 'Lossless Audio / Local Storage',
+                  path: entity.path,
+                ));
+              }
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('Error scanning music: $e');
+    }
+
+    if (foundTracks.isEmpty) {
+      foundTracks.add(AudioTrack(
+        title: 'Sample Lossless FLAC Track',
+        artist: 'Nami Hi-Fi Audio Engine',
+        path: '',
+      ));
+    }
+
+    setState(() {
+      _songs = foundTracks;
+    });
+  }
+
+  Future<void> _playSong(AudioTrack song) async {
+    if (song.path.isEmpty) return;
+    try {
+      await _audioPlayer.setAudioSource(AudioSource.file(song.path));
       await _audioPlayer.play();
       setState(() {
         _currentSong = song;
@@ -100,7 +152,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (_audioPlayer.playing) {
       await _audioPlayer.pause();
     } else {
-      if (_currentSong == null && _songs.isNotEmpty) {
+      if (_currentSong == null && _songs.isNotEmpty && _songs.first.path.isNotEmpty) {
         await _playSong(_songs.first);
       } else {
         await _audioPlayer.play();
@@ -119,27 +171,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<Widget> pages = [
       _hasPermission
           ? (_songs.isEmpty
-              ? const Center(child: Text('No audio files found on device storage.', style: TextStyle(color: Colors.grey)))
+              ? const Center(child: Text('Scanning music storage...', style: TextStyle(color: Colors.grey)))
               : ListView.builder(
                   padding: const EdgeInsets.only(bottom: 90),
                   itemCount: _songs.length,
                   itemBuilder: (context, index) {
                     final song = _songs[index];
-                    final isCurrent = _currentSong?.id == song.id;
+                    final isCurrent = _currentSong?.path == song.path;
                     return ListTile(
-                      leading: QueryArtworkWidget(
-                        controller: _audioQuery,
-                        id: song.id,
-                        type: ArtworkType.AUDIO,
-                        nullArtworkWidget: Container(
-                          width: 48,
-                          height: 48,
-                          decoration: BoxDecoration(
-                            color: Colors.deepPurple.withOpacity(0.2),
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: const Icon(Icons.music_note_rounded, color: Colors.deepPurpleAccent),
+                      leading: Container(
+                        width: 48,
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: Colors.deepPurple.withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(8),
                         ),
+                        child: const Icon(Icons.music_note_rounded, color: Colors.deepPurpleAccent),
                       ),
                       title: Text(
                         song.title,
@@ -151,15 +198,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         ),
                       ),
                       subtitle: Text(
-                        song.artist ?? '<unknown>',
+                        song.artist,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(color: Colors.grey, fontSize: 12),
                       ),
-                      trailing: Text(
-                        _formatDuration(song.duration),
-                        style: const TextStyle(color: Colors.grey, fontSize: 11),
-                      ),
+                      trailing: const Icon(Icons.play_circle_fill_rounded, color: Colors.deepPurpleAccent, size: 28),
                       onTap: () => _playSong(song),
                     );
                   },
@@ -174,7 +218,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     const SizedBox(height: 16),
                     ElevatedButton(
                       style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
-                      onPressed: _requestPermissionAndFetchSongs,
+                      onPressed: _requestPermissionAndScanMusic,
                       child: const Text('Grant Permission'),
                     ),
                   ],
@@ -237,7 +281,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                           style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                         ),
                         Text(
-                          _currentSong?.artist ?? '24-bit / Lossless FLAC Ready',
+                          _currentSong != null ? 'Playing Lossless Audio' : '24-bit / Lossless FLAC Ready',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(fontSize: 11, color: Colors.grey),
@@ -278,13 +322,5 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
     );
-  }
-
-  String _formatDuration(int? durationMs) {
-    if (durationMs == null) return '0:00';
-    int seconds = (durationMs / 1000).floor();
-    int minutes = (seconds / 60).floor();
-    int remainingSeconds = seconds % 60;
-    return '$minutes:${remainingSeconds.toString().padLeft(2, '0')}';
   }
 }

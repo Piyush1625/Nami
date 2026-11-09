@@ -22,14 +22,6 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Cache Android NDK & CMake
-        uses: actions/cache@v4
-        with:
-          path: |
-            /usr/local/lib/android/sdk/ndk
-            /usr/local/lib/android/sdk/cmake
-          key: ${{ runner.os }}-android-ndk-cmake-r26c
-
       - name: Set up Gradle Cache
         uses: gradle/actions/setup-gradle@v3
         with:
@@ -71,9 +63,11 @@ jobs:
       - name: Install Flutter Dependencies
         run: flutter pub get
 
-      - name: Inject Audio & Storage Permissions into AndroidManifest
+      - name: Inject Permissions and Background Audio Service into AndroidManifest
         run: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
+          
+          # 1. Inject Permissions above <application>
           if ! grep -q "READ_MEDIA_AUDIO" "$MANIFEST"; then
             sed -i '/<application/i \
             <uses-permission android:name="android.permission.INTERNET"/>\n\
@@ -83,6 +77,21 @@ jobs:
             <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>\n\
             <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>\n\
             <uses-permission android:name="android.permission.WAKE_LOCK"/>' "$MANIFEST"
+          fi
+          
+          # 2. Inject Background Audio Service inside <application> before <activity>
+          if ! grep -q "AudioService" "$MANIFEST"; then
+            sed -i '/<activity/i \
+            <service android:name="com.ryanheise.audioservice.AudioService" android:foregroundServiceType="mediaPlayback" android:exported="true">\n\
+                <intent-filter>\n\
+                    <action android:name="android.media.browse.MediaBrowserService" />\n\
+                </intent-filter>\n\
+            </service>\n\
+            <receiver android:name="com.ryanheise.audioservice.MediaButtonReceiver" android:exported="true">\n\
+                <intent-filter>\n\
+                    <action android:name="android.intent.action.MEDIA_BUTTON" />\n\
+                </intent-filter>\n\
+            </receiver>' "$MANIFEST"
           fi
 
       - name: Force compileSdk 36 in App & All Plugins

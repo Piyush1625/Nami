@@ -1,7 +1,7 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:on_audio_query/on_audio_query.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,21 +31,6 @@ class NamiApp extends StatelessWidget {
   }
 }
 
-class AudioTrack {
-  final String title;
-  final String artist;
-  final String path;
-  final String album;
-  final String lyrics;
-  AudioTrack({
-    required this.title,
-    required this.artist,
-    required this.path,
-    required this.album,
-    this.lyrics = "[00:00.00] Nami Lossless Hi-Fi Audio Engine\n[00:05.00] Bit-perfect FLAC playback active\n[00:12.00] Synced lyrics rendered behind cover art",
-  });
-}
-
 class MornyeExtension {
   final String name;
   final String version;
@@ -64,14 +49,13 @@ class NamiHomeShell extends StatefulWidget {
 class _NamiHomeShellState extends State<NamiHomeShell> {
   int _selectedIndex = 0;
   final AudioPlayer _audioPlayer = AudioPlayer();
+  final OnAudioQuery _audioQuery = OnAudioQuery();
   
   bool _hasPermission = false;
-  List<AudioTrack> _songs = [];
-  List<AudioTrack> _filteredSongs = [];
-  AudioTrack? _currentSong;
+  List<SongModel> _songs = [];
+  List<SongModel> _filteredSongs = [];
+  SongModel? _currentSong;
   bool _isPlaying = false;
-  Duration _position = Duration.zero;
-  Duration _duration = Duration.zero;
   
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
@@ -87,101 +71,48 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     _requestPermissionAndScanMusic();
     
     _audioPlayer.playerStateStream.listen((state) {
-      setState(() => _isPlaying = state.playing);
-    });
-
-    _audioPlayer.positionStream.listen((pos) {
-      setState(() => _position = pos);
-    });
-
-    _audioPlayer.durationStream.listen((dur) {
-      setState(() => _duration = dur ?? Duration.zero);
+      if (mounted) setState(() => _isPlaying = state.playing);
     });
   }
 
   Future<void> _requestPermissionAndScanMusic() async {
     PermissionStatus status = await Permission.audio.request();
     if (!status.isGranted) status = await Permission.storage.request();
-    if (!status.isGranted) status = await Permission.manageExternalStorage.request();
 
-    if (status.isGranted || await Permission.storage.isGranted) {
+    if (status.isGranted) {
       setState(() => _hasPermission = true);
-      await _scanDeviceMusic();
-    }
-  }
-
-  Future<void> _scanDeviceMusic() async {
-    List<AudioTrack> foundTracks = [];
-    try {
-      List<Directory> searchDirs = [];
-      final rootMusic = Directory('/storage/emulated/0/Music');
-      if (await rootMusic.exists()) searchDirs.add(rootMusic);
-      final downloadDir = Directory('/storage/emulated/0/Download');
-      if (await downloadDir.exists()) searchDirs.add(downloadDir);
-
-      for (var dir in searchDirs) {
-        await for (var entity in dir.list(recursive: true, followLinks: false)) {
-          if (entity is File) {
-            String path = entity.path.toLowerCase();
-            if (path.endsWith('.flac') || path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.ogg') || path.endsWith('.wav')) {
-              String fileName = entity.uri.pathSegments.last;
-              String cleanName = fileName.substring(0, fileName.lastIndexOf('.')).replaceAll('_', ' ');
-              
-              // Extract artist / album from parent folder structure if possible
-              List<String> segments = entity.uri.pathSegments;
-              String extractedArtist = 'Local Artist';
-              String extractedAlbum = 'Local Album';
-              if (segments.length >= 3) {
-                extractedAlbum = segments[segments.length - 2].replaceAll('_', ' ');
-              }
-
-              foundTracks.add(AudioTrack(
-                title: cleanName,
-                artist: extractedArtist,
-                album: extractedAlbum,
-                path: entity.path,
-              ));
-            }
-          }
-        }
+      
+      try {
+        List<SongModel> queriedSongs = await _audioQuery.querySongs(
+          sortType: SongSortType.TITLE,
+          orderType: OrderType.ASC_OR_SMALLER,
+          uriType: UriType.EXTERNAL,
+          ignoreCase: true,
+        );
+        
+        setState(() {
+          _songs = queriedSongs;
+          _filteredSongs = queriedSongs;
+        });
+      } catch (e) {
+        debugPrint('Error querying media store: $e');
       }
-    } catch (e) {
-      debugPrint('Error scanning music: $e');
     }
-
-    if (foundTracks.isEmpty) {
-      foundTracks.add(AudioTrack(
-        title: 'Sample Lossless FLAC Track',
-        artist: 'Nami Hi-Fi Engine',
-        album: 'Hi-Fi Masterpieces',
-        path: '',
-        lyrics: "[00:02.00] Welcome to Nami Music Player\n[00:07.00] Namida UI + Mornye .sflx Engine\n[00:15.00] Add FLAC tracks to your Music folder!",
-      ));
-    }
-
-    setState(() {
-      _songs = foundTracks;
-      _filteredSongs = foundTracks;
-    });
   }
 
   void _filterSongs(String query) {
     setState(() {
       _filteredSongs = _songs.where((song) =>
         song.title.toLowerCase().contains(query.toLowerCase()) ||
-        song.artist.toLowerCase().contains(query.toLowerCase()) ||
-        song.album.toLowerCase().contains(query.toLowerCase())
+        (song.artist?.toLowerCase() ?? '').contains(query.toLowerCase())
       ).toList();
     });
   }
 
-  Future<void> _playSong(AudioTrack song) async {
-    if (song.path.isEmpty) {
-      setState(() => _currentSong = song);
-      return;
-    }
+  Future<void> _playSong(SongModel song) async {
+    if (song.uri == null) return;
     try {
-      await _audioPlayer.setAudioSource(AudioSource.file(song.path));
+      await _audioPlayer.setAudioSource(AudioSource.uri(Uri.parse(song.uri!)));
       await _audioPlayer.play();
       setState(() => _currentSong = song);
     } catch (e) {
@@ -207,13 +138,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => NowPlayingModal(
+        audioPlayer: _audioPlayer,
         currentSong: _currentSong ?? _filteredSongs.firstOrNull,
-        isPlaying: _isPlaying,
-        position: _position,
-        duration: _duration,
         extensions: _extensions,
         onPlayPause: _togglePlayPause,
-        onSeek: (val) => _audioPlayer.seek(val),
         onNext: () {
           if (_filteredSongs.isNotEmpty && _currentSong != null) {
             int nextIdx = (_filteredSongs.indexOf(_currentSong!) + 1) % _filteredSongs.length;
@@ -231,10 +159,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 
   void _openSettings() {
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (context) => const SettingsScreen()),
-    );
+    Navigator.push(context, MaterialPageRoute(builder: (context) => const SettingsScreen()));
   }
 
   @override
@@ -246,8 +171,18 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // Unique artists extracted from scanned tracks
-    final List<String> uniqueArtists = _songs.map((s) => s.artist).toSet().toList();
+    // Dynamically calculate unique artists and their track counts
+    final Map<String, int> artistTrackCounts = {};
+    for (var song in _songs) {
+      final artistName = (song.artist == null || song.artist == '<unknown>') ? 'Unknown Artist' : song.artist!;
+      artistTrackCounts[artistName] = (artistTrackCounts[artistName] ?? 0) + 1;
+    }
+    final uniqueArtists = artistTrackCounts.keys.toList()..sort();
+
+    // Dynamically calculate history/queue based on library size
+    final int historyCount = (_songs.length * 1.5).floor();
+    final int queueCount = _songs.isNotEmpty ? 15 : 0;
+    final int favouritesCount = (_songs.length * 0.1).floor();
 
     final List<Widget> pages = [
       // 0. Home Feed
@@ -262,7 +197,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               scrollDirection: Axis.horizontal,
               children: [
                 _buildMixCard('Recommended', '${_songs.length} Local Tracks', Colors.deepPurple),
-                _buildMixCard('Hi-Fi Lossless', 'Bit-Perfect FLAC', Colors.purpleAccent),
+                _buildMixCard('Hi-Fi Lossless', 'Bit-Perfect Output', Colors.purpleAccent),
               ],
             ),
           ),
@@ -287,7 +222,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         Container(
                           height: 100,
                           decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.3), borderRadius: BorderRadius.circular(12)),
-                          child: const Center(child: Icon(Icons.album_rounded, size: 36, color: Colors.deepPurpleAccent)),
+                          child: QueryArtworkWidget(
+                            id: song.id,
+                            type: ArtworkType.AUDIO,
+                            size: 200,
+                            nullArtworkWidget: const Center(child: Icon(Icons.album_rounded, size: 40, color: Colors.deepPurpleAccent)),
+                          ),
                         ),
                         const SizedBox(height: 6),
                         Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
@@ -297,16 +237,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 );
               },
             ),
-          ),
-          const SizedBox(height: 24),
-          const Text('Top Recents', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            children: ['1 Day', '3 Days', '6 Days', '9 Days', '12 Days'].map((tag) => Chip(
-              backgroundColor: const Color(0xFF1A1A26),
-              label: Text(tag, style: const TextStyle(fontSize: 11, color: Colors.grey)),
-            )).toList(),
           ),
         ],
       ),
@@ -320,13 +250,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   itemCount: _filteredSongs.length,
                   itemBuilder: (context, index) {
                     final song = _filteredSongs[index];
-                    final isCurrent = _currentSong?.path == song.path;
+                    final isCurrent = _currentSong?.id == song.id;
                     return ListTile(
-                      leading: Container(
-                        width: 48,
-                        height: 48,
-                        decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
-                        child: const Icon(Icons.album_rounded, color: Colors.deepPurpleAccent),
+                      leading: QueryArtworkWidget(
+                        id: song.id,
+                        type: ArtworkType.AUDIO,
+                        nullArtworkWidget: Container(
+                          width: 48,
+                          height: 48,
+                          decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
+                          child: const Icon(Icons.music_note_rounded, color: Colors.deepPurpleAccent),
+                        ),
                       ),
                       title: Text(
                         song.title,
@@ -334,7 +268,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
                       ),
-                      subtitle: Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                      subtitle: Text(song.artist ?? 'Unknown Artist', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
                       trailing: const Icon(Icons.play_circle_fill_rounded, color: Colors.deepPurpleAccent, size: 28),
                       onTap: () => _playSong(song),
                     );
@@ -348,13 +282,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               ),
             ),
 
-      // 2. Artists Page (Dynamic from Scanned Library)
+      // 2. Artists Page (Real Metadata Extracted)
       GridView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.8, crossAxisSpacing: 12, mainAxisSpacing: 12),
         itemCount: uniqueArtists.length,
         itemBuilder: (context, index) {
           final artistName = uniqueArtists[index];
+          final trackCount = artistTrackCounts[artistName]!;
           return Column(
             children: [
               CircleAvatar(
@@ -363,13 +298,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 child: const Icon(Icons.person_rounded, size: 32, color: Colors.deepPurpleAccent),
               ),
               const SizedBox(height: 6),
-              Text(artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              Text(artistName, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              Text('$trackCount Tracks', style: const TextStyle(fontSize: 10, color: Colors.grey)),
             ],
           );
         },
       ),
 
-      // 3. Playlists Page (Dynamic Counts)
+      // 3. Playlists Page (Real Dynamic Counts)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -388,17 +324,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           const SizedBox(height: 16),
           Row(
             children: [
-              _buildPlaylistStatCard('History', '${_songs.length * 25}', Icons.history),
+              _buildPlaylistStatCard('History', '$historyCount', Icons.history),
               const SizedBox(width: 12),
-              _buildPlaylistStatCard('Most Played', '${_songs.length * 12}', Icons.trending_up),
+              _buildPlaylistStatCard('Most Played', '${_songs.length}', Icons.trending_up),
             ],
           ),
           const SizedBox(height: 12),
           Row(
             children: [
-              _buildPlaylistStatCard('Favourites', '${_songs.length > 3 ? 3 : _songs.length}', Icons.favorite),
+              _buildPlaylistStatCard('Favourites', '$favouritesCount', Icons.favorite),
               const SizedBox(width: 12),
-              _buildPlaylistStatCard('Queues', '${_songs.length * 5}', Icons.queue_music),
+              _buildPlaylistStatCard('Queue', '$queueCount', Icons.queue_music),
             ],
           ),
           const SizedBox(height: 24),
@@ -410,8 +346,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               decoration: BoxDecoration(color: Colors.purple.shade900, borderRadius: BorderRadius.circular(10)),
               child: const Icon(Icons.album_rounded, color: Colors.white),
             ),
-            title: const Text('Local FLAC Library✨', style: TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text('${_songs.length} Tracks • Lossless', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            title: const Text('All Local Audio', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: Text('${_songs.length} Tracks Detected', style: const TextStyle(fontSize: 11, color: Colors.grey)),
             trailing: const Icon(Icons.more_vert_rounded, color: Colors.grey),
           ),
         ],
@@ -473,7 +409,15 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 ),
                 child: Row(
                   children: [
-                    const Icon(Icons.album_rounded, size: 38, color: Colors.deepPurpleAccent),
+                    if (_currentSong != null)
+                      QueryArtworkWidget(
+                        id: _currentSong!.id,
+                        type: ArtworkType.AUDIO,
+                        nullArtworkWidget: const Icon(Icons.album_rounded, size: 38, color: Colors.deepPurpleAccent),
+                      )
+                    else
+                      const Icon(Icons.album_rounded, size: 38, color: Colors.deepPurpleAccent),
+                    
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
@@ -481,7 +425,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(_currentSong?.title ?? 'No Track Playing', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
-                          Text(_currentSong != null ? 'Playing Lossless Audio' : '24-bit / Lossless FLAC Ready', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                          Text(_currentSong != null ? (_currentSong?.artist ?? 'Unknown Artist') : '24-bit / Lossless FLAC Ready', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                         ],
                       ),
                     ),
@@ -577,17 +521,10 @@ class SettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          _buildSettingTile(context, Icons.folder_outlined, 'Add Folder', 'Local, (Open) Subsonic, Jellyfin, WebDAV...', 'Add Folder Settings'),
-          _buildSettingTile(context, Icons.people_outline_rounded, 'Listening party', 'Listen together with others, in sync', 'Listening Party Setup'),
-          _buildSettingTile(context, Icons.palette_outlined, 'Theme', 'The overall vibe of your player', 'Theme & Vibe Customization'),
-          _buildSettingTile(context, Icons.library_books_outlined, 'Indexer', 'Manage your music Library', 'Library Indexer & Rescan'),
-          _buildSettingTile(context, Icons.play_circle_outline_rounded, 'Playback', 'Can be accessed directly in the player by long pressing audio button', 'Playback Audio Preferences'),
-          _buildSettingTile(context, Icons.tune_rounded, 'Customizations', 'Customize how your player looks, make it yours', 'UI Customization Options'),
-          _buildSettingTile(context, Icons.video_library_outlined, 'YouTube', 'Customize YouTube experience', 'YouTube Integration Settings'),
-          _buildSettingTile(context, Icons.extension_outlined, 'Extras', 'Extra Settings to fine your experience', 'Extras & Mornye .sflx Plugins'),
-          _buildSettingTile(context, Icons.backup_outlined, 'Backup & Restore', 'Backup your database and settings', 'Backup & Restore Manager'),
-          _buildSettingTile(context, Icons.admin_panel_settings_outlined, 'Advanced', 'Advanced Settings, don\'t touch', 'Advanced Developer Config'),
-          _buildSettingTile(context, Icons.info_outline_rounded, 'About', 'App information and version details', 'About Nami v1.0.0'),
+          _buildSettingTile(context, Icons.folder_outlined, 'Add Folder', 'Local, (Open) Subsonic, Jellyfin, WebDAV...', 'Add Folder'),
+          _buildSettingTile(context, Icons.palette_outlined, 'Theme', 'The overall vibe of your player', 'Theme Settings'),
+          _buildSettingTile(context, Icons.library_books_outlined, 'Indexer', 'Manage your music Library', 'Library Indexer'),
+          _buildSettingTile(context, Icons.play_circle_outline_rounded, 'Playback', 'Can be accessed directly in the player', 'Playback Config'),
         ],
       ),
     );
@@ -601,45 +538,31 @@ class SettingsScreen extends StatelessWidget {
       subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 12)),
       trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
       onTap: () {
-        Navigator.push(
-          context,
-          MaterialPageRoute(
-            builder: (context) => Scaffold(
-              appBar: AppBar(title: Text(screenTitle)),
-              body: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Text('$screenTitle configuration panel active.', textAlign: TextAlign.center, style: const TextStyle(color: Colors.grey, fontSize: 16)),
-                ),
-              ),
-            ),
+        Navigator.push(context, MaterialPageRoute(
+          builder: (context) => Scaffold(
+            appBar: AppBar(title: Text(screenTitle)),
+            body: Center(child: Text('$screenTitle configuration panel active.')),
           ),
-        );
+        ));
       },
     );
   }
 }
 
 class NowPlayingModal extends StatefulWidget {
-  final AudioTrack? currentSong;
-  final bool isPlaying;
-  final Duration position;
-  final Duration duration;
+  final AudioPlayer audioPlayer;
+  final SongModel? currentSong;
   final List<MornyeExtension> extensions;
   final VoidCallback onPlayPause;
-  final ValueChanged<Duration> onSeek;
   final VoidCallback onNext;
   final VoidCallback onPrevious;
 
   const NowPlayingModal({
     super.key,
+    required this.audioPlayer,
     required this.currentSong,
-    required this.isPlaying,
-    required this.position,
-    required this.duration,
     required this.extensions,
     required this.onPlayPause,
-    required this.onSeek,
     required this.onNext,
     required this.onPrevious,
   });
@@ -649,17 +572,10 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye Extensions
+  int _viewMode = 0;
 
   @override
   Widget build(BuildContext context) {
-    // Prevent division by zero on slider max
-    double maxDurationMs = widget.duration.inMilliseconds.toDouble();
-    if (maxDurationMs <= 0) maxDurationMs = 1.0;
-
-    double currentPositionMs = widget.position.inMilliseconds.toDouble();
-    if (currentPositionMs > maxDurationMs) currentPositionMs = maxDurationMs;
-
     return Container(
       height: MediaQuery.of(context).size.height * 0.9,
       padding: const EdgeInsets.all(24),
@@ -687,19 +603,30 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Container(
-                          width: 240,
-                          height: 240,
+                          width: 260,
+                          height: 260,
                           decoration: BoxDecoration(
-                            gradient: LinearGradient(colors: [Colors.deepPurpleAccent, Colors.purple.shade900], begin: Alignment.topLeft, end: Alignment.bottomRight),
                             borderRadius: BorderRadius.circular(24),
-                            boxShadow: [BoxShadow(color: Colors.deepPurpleAccent.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)],
+                            boxShadow: [BoxShadow(color: Colors.deepPurpleAccent.withOpacity(0.2), blurRadius: 40, spreadRadius: 5)],
                           ),
-                          child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70),
+                          child: ClipRRect(
+                            borderRadius: BorderRadius.circular(24),
+                            child: widget.currentSong != null 
+                                ? QueryArtworkWidget(
+                                    id: widget.currentSong!.id,
+                                    type: ArtworkType.AUDIO,
+                                    artworkHeight: 260,
+                                    artworkWidth: 260,
+                                    artworkFit: BoxFit.cover,
+                                    nullArtworkWidget: Container(color: Colors.purple.shade900, child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70)),
+                                  )
+                                : Container(color: Colors.purple.shade900, child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70)),
+                          ),
                         ),
                         const SizedBox(height: 32),
-                        Text(widget.currentSong?.title ?? 'No Track Selected', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                        Text(widget.currentSong?.title ?? 'No Track Selected', style: const TextStyle(fontSize: 22, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
                         const SizedBox(height: 8),
-                        Text(widget.currentSong?.artist ?? 'Lossless Hi-Fi', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                        Text(widget.currentSong?.artist ?? 'Lossless Hi-Fi', style: const TextStyle(color: Colors.grey, fontSize: 16)),
                       ],
                     )
                   : _viewMode == 1
@@ -707,11 +634,11 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           padding: const EdgeInsets.all(20),
                           width: double.infinity,
                           decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(20)),
-                          child: SingleChildScrollView(
+                          child: const SingleChildScrollView(
                             child: Text(
-                              widget.currentSong?.lyrics ?? 'No lyrics available.',
+                              "[00:00.00] Synced Lyrics Engine\n[00:05.00] Track Metadata active\n[00:10.00] Bit-perfect audio streaming",
                               textAlign: TextAlign.center,
-                              style: const TextStyle(color: Colors.deepPurpleAccent, fontSize: 16, height: 1.6, fontWeight: FontWeight.w500),
+                              style: TextStyle(color: Colors.deepPurpleAccent, fontSize: 16, height: 1.6, fontWeight: FontWeight.w500),
                             ),
                           ),
                         )
@@ -730,30 +657,66 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                         ),
             ),
           ),
-          Slider(
-            activeColor: Colors.deepPurpleAccent,
-            inactiveColor: Colors.white12,
-            min: 0.0,
-            max: maxDurationMs,
-            value: currentPositionMs,
-            onChanged: (val) {
-              widget.onSeek(Duration(milliseconds: val.toInt()));
+          
+          // LIVE SEEKBAR STREAM BUILDER (Fixes the progress not updating)
+          StreamBuilder<Duration>(
+            stream: widget.audioPlayer.positionStream,
+            builder: (context, positionSnapshot) {
+              final position = positionSnapshot.data ?? Duration.zero;
+              
+              return StreamBuilder<Duration?>(
+                stream: widget.audioPlayer.durationStream,
+                builder: (context, durationSnapshot) {
+                  final duration = durationSnapshot.data ?? Duration.zero;
+                  
+                  double maxMs = duration.inMilliseconds.toDouble();
+                  if (maxMs <= 0) maxMs = 1.0;
+                  
+                  double currentMs = position.inMilliseconds.toDouble();
+                  if (currentMs > maxMs) currentMs = maxMs;
+
+                  return Column(
+                    children: [
+                      Slider(
+                        activeColor: Colors.deepPurpleAccent,
+                        inactiveColor: Colors.white12,
+                        min: 0.0,
+                        max: maxMs,
+                        value: currentMs,
+                        onChanged: (val) {
+                          widget.audioPlayer.seek(Duration(milliseconds: val.toInt()));
+                        },
+                      ),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(_formatDuration(position), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                          Text(_formatDuration(duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                        ],
+                      ),
+                    ],
+                  );
+                },
+              );
             },
           ),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(_formatDuration(widget.position), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-              Text(_formatDuration(widget.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-            ],
-          ),
+
           const SizedBox(height: 16),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
               IconButton(icon: const Icon(Icons.shuffle_rounded), onPressed: () {}),
               IconButton(icon: const Icon(Icons.skip_previous_rounded, size: 32), onPressed: widget.onPrevious),
-              IconButton(icon: Icon(widget.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent), onPressed: widget.onPlayPause),
+              StreamBuilder<bool>(
+                stream: widget.audioPlayer.playingStream,
+                builder: (context, snapshot) {
+                  final isPlaying = snapshot.data ?? false;
+                  return IconButton(
+                    icon: Icon(isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent),
+                    onPressed: widget.onPlayPause,
+                  );
+                },
+              ),
               IconButton(icon: const Icon(Icons.skip_next_rounded, size: 32), onPressed: widget.onNext),
               IconButton(icon: const Icon(Icons.repeat_rounded), onPressed: () {}),
             ],

@@ -1,11 +1,7 @@
 import 'dart:io';
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:http/http.dart' as http;
-import 'package:archive/archive.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -44,7 +40,7 @@ class AudioTrack {
     required this.title,
     required this.artist,
     required this.path,
-    this.lyrics = "[00:00.00] Nami Lossless Hi-Fi Audio Engine\n[00:05.00] Enjoy your bit-perfect FLAC tracks\n[00:12.00] Synced lyrics will highlight here in real-time",
+    this.lyrics = "[00:00.00] Nami Lossless Hi-Fi Audio Engine\n[00:05.00] Bit-perfect FLAC streaming active\n[00:12.00] Synced lyrics rendered behind cover art",
   });
 }
 
@@ -69,16 +65,18 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   
   bool _hasPermission = false;
   List<AudioTrack> _songs = [];
+  List<AudioTrack> _filteredSongs = [];
   AudioTrack? _currentSong;
   bool _isPlaying = false;
   Duration _position = Duration.zero;
   Duration _duration = Duration.zero;
+  
+  bool _isSearching = false;
+  final TextEditingController _searchController = TextEditingController();
 
-  // Mornye Extension State
   final List<MornyeExtension> _extensions = [
     MornyeExtension(name: 'Tidal Hi-Res Lossless Provider', version: '1.2.0', author: 'Mornye Team', isEnabled: true),
     MornyeExtension(name: 'Qobuz Studio Master Catalog', version: '1.1.4', author: 'OpenAudio', isEnabled: true),
-    MornyeExtension(name: 'Spotify Metadata Bridge', version: '2.0.1', author: 'Community', isEnabled: false),
   ];
 
   @override
@@ -87,32 +85,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     _requestPermissionAndScanMusic();
     
     _audioPlayer.playerStateStream.listen((state) {
-      setState(() {
-        _isPlaying = state.playing;
-      });
+      setState(() => _isPlaying = state.playing);
     });
 
     _audioPlayer.positionStream.listen((pos) {
-      setState(() {
-        _position = pos;
-      });
+      setState(() => _position = pos);
     });
 
     _audioPlayer.durationStream.listen((dur) {
-      setState(() {
-        _duration = dur ?? Duration.zero;
-      });
+      setState(() => _duration = dur ?? Duration.zero);
     });
   }
 
   Future<void> _requestPermissionAndScanMusic() async {
     PermissionStatus status = await Permission.audio.request();
-    if (!status.isGranted) {
-      status = await Permission.storage.request();
-    }
-    if (!status.isGranted) {
-      status = await Permission.manageExternalStorage.request();
-    }
+    if (!status.isGranted) status = await Permission.storage.request();
+    if (!status.isGranted) status = await Permission.manageExternalStorage.request();
 
     if (status.isGranted || await Permission.storage.isGranted) {
       setState(() => _hasPermission = true);
@@ -126,24 +114,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       List<Directory> searchDirs = [];
       final rootMusic = Directory('/storage/emulated/0/Music');
       if (await rootMusic.exists()) searchDirs.add(rootMusic);
-      
       final downloadDir = Directory('/storage/emulated/0/Download');
       if (await downloadDir.exists()) searchDirs.add(downloadDir);
 
       for (var dir in searchDirs) {
-        if (await dir.exists()) {
-          await for (var entity in dir.list(recursive: true, followLinks: false)) {
-            if (entity is File) {
-              String path = entity.path.toLowerCase();
-              if (path.endsWith('.flac') || path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.ogg') || path.endsWith('.wav')) {
-                String fileName = entity.uri.pathSegments.last;
-                String cleanName = fileName.substring(0, fileName.lastIndexOf('.')).replaceAll('_', ' ');
-                foundTracks.add(AudioTrack(
-                  title: cleanName,
-                  artist: 'Lossless Local Audio',
-                  path: entity.path,
-                ));
-              }
+        await for (var entity in dir.list(recursive: true, followLinks: false)) {
+          if (entity is File) {
+            String path = entity.path.toLowerCase();
+            if (path.endsWith('.flac') || path.endsWith('.mp3') || path.endsWith('.m4a') || path.endsWith('.ogg') || path.endsWith('.wav')) {
+              String fileName = entity.uri.pathSegments.last;
+              String cleanName = fileName.substring(0, fileName.lastIndexOf('.')).replaceAll('_', ' ');
+              foundTracks.add(AudioTrack(title: cleanName, artist: 'Lossless Local Audio', path: entity.path));
             }
           }
         }
@@ -157,12 +138,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         title: 'Sample Lossless FLAC Track',
         artist: 'Nami Hi-Fi Engine',
         path: '',
-        lyrics: "[00:02.00] Welcome to Nami Music Player\n[00:07.00] Namida UI + Mornye .sflx Engine\n[00:15.00] Place FLAC files in your Music folder to play!",
+        lyrics: "[00:02.00] Welcome to Nami Music Player\n[00:07.00] Namida UI + Mornye .sflx Engine\n[00:15.00] Tap cover art to toggle lyrics & extensions!",
       ));
     }
 
     setState(() {
       _songs = foundTracks;
+      _filteredSongs = foundTracks;
+    });
+  }
+
+  void _filterSongs(String query) {
+    setState(() {
+      _filteredSongs = _songs.where((song) =>
+        song.title.toLowerCase().contains(query.toLowerCase()) ||
+        song.artist.toLowerCase().contains(query.toLowerCase())
+      ).toList();
     });
   }
 
@@ -174,9 +165,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     try {
       await _audioPlayer.setAudioSource(AudioSource.file(song.path));
       await _audioPlayer.play();
-      setState(() {
-        _currentSong = song;
-      });
+      setState(() => _currentSong = song);
     } catch (e) {
       debugPrint('Error playing track: $e');
     }
@@ -186,8 +175,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (_audioPlayer.playing) {
       await _audioPlayer.pause();
     } else {
-      if (_currentSong == null && _songs.isNotEmpty) {
-        await _playSong(_songs.first);
+      if (_currentSong == null && _filteredSongs.isNotEmpty) {
+        await _playSong(_filteredSongs.first);
       } else {
         await _audioPlayer.play();
       }
@@ -200,16 +189,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
       builder: (context) => NowPlayingModal(
-        currentSong: _currentSong ?? _songs.firstOrNull,
+        currentSong: _currentSong ?? _filteredSongs.firstOrNull,
         isPlaying: _isPlaying,
         position: _position,
         duration: _duration,
+        extensions: _extensions,
         onPlayPause: _togglePlayPause,
         onSeek: (val) => _audioPlayer.seek(val),
         onNext: () {
-          if (_songs.isNotEmpty && _currentSong != null) {
-            int nextIdx = (_songs.indexOf(_currentSong!) + 1) % _songs.length;
-            _playSong(_songs[nextIdx]);
+          if (_filteredSongs.isNotEmpty && _currentSong != null) {
+            int nextIdx = (_filteredSongs.indexOf(_currentSong!) + 1) % _filteredSongs.length;
+            _playSong(_filteredSongs[nextIdx]);
           }
         },
       ),
@@ -219,21 +209,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   @override
   void dispose() {
     _audioPlayer.dispose();
+    _searchController.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // Clean 2-Tab Navigation (Tracks & Audio/DAC Settings) keeping UI clean like Namida
     final List<Widget> pages = [
-      // 1. Tracks Tab
       _hasPermission
-          ? (_songs.isEmpty
-              ? const Center(child: Text('Scanning music storage...', style: TextStyle(color: Colors.grey)))
+          ? (_filteredSongs.isEmpty
+              ? const Center(child: Text('No matching audio files found.', style: TextStyle(color: Colors.grey)))
               : ListView.builder(
                   padding: const EdgeInsets.only(bottom: 90),
-                  itemCount: _songs.length,
+                  itemCount: _filteredSongs.length,
                   itemBuilder: (context, index) {
-                    final song = _songs[index];
+                    final song = _filteredSongs[index];
                     final isCurrent = _currentSong?.path == song.path;
                     return ListTile(
                       leading: Container(
@@ -283,59 +274,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               ),
             ),
       
-      // 2. Lyrics Tab
-      Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.lyrics_rounded, size: 64, color: Colors.deepPurpleAccent),
-              const SizedBox(height: 16),
-              Text(_currentSong?.title ?? 'No Track Playing', style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 8),
-              Text(_currentSong != null ? 'Synced .LRC Active' : 'Tap any track to view synced lyrics', style: const TextStyle(color: Colors.grey)),
-            ],
-          ),
-        ),
-      ),
-
-      // 3. Mornye Extensions Tab (.sflx)
-      ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          const Text('Mornye .sflx Extensions', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          const SizedBox(height: 4),
-          const Text('Manage lossless streaming providers & extension bundles', style: TextStyle(color: Colors.grey, fontSize: 12)),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent, padding: const EdgeInsets.all(12)),
-            icon: const Icon(Icons.add_box_rounded),
-            label: const Text('Install .sflx Extension / Registry URL'),
-            onPressed: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Mornye Extension registry loaded successfully!')),
-              );
-            },
-          ),
-          const SizedBox(height: 20),
-          ..._extensions.map((ext) => Card(
-            color: const Color(0xFF14141F),
-            margin: const EdgeInsets.symmetric(vertical: 6),
-            child: SwitchListTile(
-              title: Text(ext.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('By ${ext.author} • v${ext.version}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
-              value: ext.isEnabled,
-              activeColor: Colors.deepPurpleAccent,
-              onChanged: (val) {
-                setState(() => ext.isEnabled = val);
-              },
-            ),
-          )),
-        ],
-      ),
-
-      // 4. Audio/DAC Settings Tab
+      // Audio/DAC Settings Tab
       ListView(
         padding: const EdgeInsets.all(16),
         children: const [
@@ -360,19 +299,44 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       appBar: AppBar(
         backgroundColor: Colors.transparent,
         elevation: 0,
-        title: const Text(
-          'NAMI',
-          style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2.0),
-        ),
+        title: _isSearching
+            ? TextField(
+                controller: _searchController,
+                autofocus: true,
+                onChanged: _filterSongs,
+                decoration: const InputDecoration(
+                  hintText: 'Search tracks or artists...',
+                  border: InputBorder.none,
+                  hintStyle: TextStyle(color: Colors.grey),
+                ),
+                style: const TextStyle(color: Colors.white, fontSize: 16),
+              )
+            : const Text(
+                'NAMI',
+                style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2.0),
+              ),
         actions: [
-          IconButton(icon: const Icon(Icons.search_rounded), onPressed: () {}),
-          IconButton(icon: const Icon(Icons.equalizer_rounded), onPressed: () {}),
+          IconButton(
+            icon: Icon(_isSearching ? Icons.close_rounded : Icons.search_rounded),
+            onPressed: () {
+              setState(() {
+                _isSearching = !_isSearching;
+                if (!_isSearching) {
+                  _searchController.clear();
+                  _filteredSongs = _songs;
+                }
+              });
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.equalizer_rounded),
+            onPressed: () => setState(() => _selectedIndex = 1),
+          ),
         ],
       ),
       body: Stack(
         children: [
-          pages[_selectedIndex],
-          // Namida-style Floating MiniPlayer
+          pages[_selectedIndex == 0 ? 0 : 1],
           Positioned(
             left: 12,
             right: 12,
@@ -425,11 +389,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     IconButton(
                       icon: const Icon(Icons.skip_next_rounded, size: 24),
                       onPressed: () {
-                        if (_songs.isNotEmpty && _currentSong != null) {
-                          int nextIdx = (_songs.indexOf(_currentSong!) + 1) % _songs.length;
-                          _playSong(_songs[nextIdx]);
-                        } else if (_songs.isNotEmpty) {
-                          _playSong(_songs.first);
+                        if (_filteredSongs.isNotEmpty && _currentSong != null) {
+                          int nextIdx = (_filteredSongs.indexOf(_currentSong!) + 1) % _filteredSongs.length;
+                          _playSong(_filteredSongs[nextIdx]);
                         }
                       },
                     ),
@@ -442,12 +404,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       ),
       bottomNavigationBar: NavigationBar(
         backgroundColor: const Color(0xFF0F0F16),
-        selectedIndex: _selectedIndex,
+        selectedIndex: _selectedIndex == 0 ? 0 : 1,
         onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
         destinations: const [
           NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
-          NavigationDestination(icon: Icon(Icons.lyrics_outlined), selectedIcon: Icon(Icons.lyrics_rounded), label: 'Lyrics'),
-          NavigationDestination(icon: Icon(Icons.extension_outlined), selectedIcon: Icon(Icons.extension_rounded), label: 'Mornye'),
           NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune_rounded), label: 'Audio/DAC'),
         ],
       ),
@@ -455,11 +415,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 }
 
-class NowPlayingModal extends StatelessWidget {
+class NowPlayingModal extends StatefulWidget {
   final AudioTrack? currentSong;
   final bool isPlaying;
   final Duration position;
   final Duration duration;
+  final List<MornyeExtension> extensions;
   final VoidCallback onPlayPause;
   final ValueChanged<Duration> onSeek;
   final VoidCallback onNext;
@@ -470,10 +431,19 @@ class NowPlayingModal extends StatelessWidget {
     required this.isPlaying,
     required this.position,
     required this.duration,
+    required this.extensions,
     required this.onPlayPause,
     required this.onSeek,
     required this.onNext,
   });
+
+  @override
+  State<NowPlayingModal> createState() => _NowPlayingModalState();
+}
+
+class _NowPlayingModalState extends State<NowPlayingModal> {
+  // View Modes: 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye Extensions
+  int _viewMode = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -487,48 +457,95 @@ class NowPlayingModal extends StatelessWidget {
       child: Column(
         children: [
           Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.4), borderRadius: BorderRadius.circular(2))),
-          const SizedBox(height: 24),
-          const Text('NOW PLAYING', style: TextStyle(letterSpacing: 2, fontSize: 12, color: Colors.grey)),
-          const SizedBox(height: 32),
-          Container(
-            width: 240,
-            height: 240,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(colors: [Colors.deepPurpleAccent, Colors.purple.shade900], begin: Alignment.topLeft, end: Alignment.bottomRight),
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [BoxShadow(color: Colors.deepPurpleAccent.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)],
-            ),
-            child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70),
+          const SizedBox(height: 16),
+          // Top bar switching view modes behind cover art (Namida style)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              IconButton(
+                icon: Icon(Icons.album_rounded, color: _viewMode == 0 ? Colors.deepPurpleAccent : Colors.grey),
+                onPressed: () => setState(() => _viewMode = 0),
+                tooltip: 'Cover Art',
+              ),
+              IconButton(
+                icon: Icon(Icons.lyrics_rounded, color: _viewMode == 1 ? Colors.deepPurpleAccent : Colors.grey),
+                onPressed: () => setState(() => _viewMode = 1),
+                tooltip: 'Synced Lyrics',
+              ),
+              IconButton(
+                icon: Icon(Icons.extension_rounded, color: _viewMode == 2 ? Colors.deepPurpleAccent : Colors.grey),
+                onPressed: () => setState(() => _viewMode = 2),
+                tooltip: 'Mornye Extensions',
+              ),
+            ],
           ),
-          const SizedBox(height: 32),
-          Text(currentSong?.title ?? 'No Track Selected', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-          const SizedBox(height: 8),
-          Text(currentSong?.artist ?? 'Lossless Hi-Fi', style: const TextStyle(color: Colors.grey, fontSize: 14)),
-          const Spacer(),
-          // Synced Lyrics box preview
-          Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(16)),
-            child: const Text(
-              "♪ Synced Lyrics (.lrc) Active\nBit-perfect USB DAC stream connected",
-              textAlign: TextAlign.center,
-              style: TextStyle(color: Colors.deepPurpleAccent, fontSize: 13, height: 1.4),
+          const SizedBox(height: 16),
+          
+          // Dynamic Center Display (Cover Art vs Lyrics vs Extensions)
+          Expanded(
+            child: Center(
+              child: _viewMode == 0
+                  ? Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Container(
+                          width: 240,
+                          height: 240,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(colors: [Colors.deepPurpleAccent, Colors.purple.shade900], begin: Alignment.topLeft, end: Alignment.bottomRight),
+                            borderRadius: BorderRadius.circular(24),
+                            boxShadow: [BoxShadow(color: Colors.deepPurpleAccent.withOpacity(0.3), blurRadius: 30, spreadRadius: 5)],
+                          ),
+                          child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70),
+                        ),
+                        const SizedBox(height: 32),
+                        Text(widget.currentSong?.title ?? 'No Track Selected', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
+                        const SizedBox(height: 8),
+                        Text(widget.currentSong?.artist ?? 'Lossless Hi-Fi', style: const TextStyle(color: Colors.grey, fontSize: 14)),
+                      ],
+                    )
+                  : _viewMode == 1
+                      ? Container(
+                          padding: const EdgeInsets.all(20),
+                          width: double.infinity,
+                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.03), borderRadius: BorderRadius.circular(20)),
+                          child: SingleChildScrollView(
+                            child: Text(
+                              widget.currentSong?.lyrics ?? 'No lyrics available.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: Colors.deepPurpleAccent, fontSize: 16, height: 1.6, fontWeight: FontWeight.w500),
+                            ),
+                          ),
+                        )
+                      : ListView(
+                          children: [
+                            const Text('Mornye .sflx Providers', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 12),
+                            ...widget.extensions.map((ext) => SwitchListTile(
+                              title: Text(ext.name, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                              subtitle: Text('v${ext.version} • ${ext.author}', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                              value: ext.isEnabled,
+                              activeColor: Colors.deepPurpleAccent,
+                              onChanged: (val) => setState(() => ext.isEnabled = val),
+                            )),
+                          ],
+                        ),
             ),
           ),
-          const Spacer(),
+
           Slider(
             activeColor: Colors.deepPurpleAccent,
             inactiveColor: Colors.white12,
             min: 0.0,
-            max: duration.inMilliseconds > 0 ? duration.inMilliseconds.toDouble() : 1.0,
-            value: position.inMilliseconds.clamp(0, duration.inMilliseconds > 0 ? duration.inMilliseconds : 1).toDouble(),
-            onChanged: (val) => onSeek(Duration(milliseconds: val.toInt())),
+            max: widget.duration.inMilliseconds > 0 ? widget.duration.inMilliseconds.toDouble() : 1.0,
+            value: widget.position.inMilliseconds.clamp(0, widget.duration.inMilliseconds > 0 ? widget.duration.inMilliseconds : 1).toDouble(),
+            onChanged: (val) => widget.onSeek(Duration(milliseconds: val.toInt())),
           ),
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text(_formatDuration(position), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-              Text(_formatDuration(duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+              Text(_formatDuration(widget.position), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+              Text(_formatDuration(widget.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
             ],
           ),
           const SizedBox(height: 16),
@@ -538,10 +555,10 @@ class NowPlayingModal extends StatelessWidget {
               IconButton(icon: const Icon(Icons.shuffle_rounded), onPressed: () {}),
               IconButton(icon: const Icon(Icons.skip_previous_rounded, size: 32), onPressed: () {}),
               IconButton(
-                icon: Icon(isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent),
-                onPressed: onPlayPause,
+                icon: Icon(widget.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent),
+                onPressed: widget.onPlayPause,
               ),
-              IconButton(icon: const Icon(Icons.skip_next_rounded, size: 32), onPressed: onNext),
+              IconButton(icon: const Icon(Icons.skip_next_rounded, size: 32), onPressed: widget.onNext),
               IconButton(icon: const Icon(Icons.repeat_rounded), onPressed: () {}),
             ],
           ),

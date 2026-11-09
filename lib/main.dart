@@ -632,7 +632,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               _artistCategoryCard(Icons.library_music_rounded, 'Singles: ${artistTracks.length}'),
               const SizedBox(height: 24),
               Row(
-                mainAxisAlignment: MainAxisAlignment.between,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Text('${artistTracks.length} Tracks - 30min', style: const TextStyle(color: Colors.grey, fontSize: 13)),
                   const Row(children: [Text('Year ', style: TextStyle(color: Colors.grey, fontSize: 13)), Icon(Icons.arrow_drop_down, color: Colors.grey)]),
@@ -833,7 +833,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           ),
           const SizedBox(height: 24),
           Row(
-            mainAxisAlignment: MainAxisAlignment.between,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const Icon(Icons.chevron_right_rounded, color: Colors.grey),
@@ -871,7 +871,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             ),
           const SizedBox(height: 24),
           Row(
-            mainAxisAlignment: MainAxisAlignment.between,
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               const Text('Top Recents', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
               const Icon(Icons.chevron_right_rounded, color: Colors.grey),

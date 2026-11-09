@@ -100,6 +100,7 @@ jobs:
             sed -i 's/compileSdk = .*/compileSdk = 36/g' android/app/build.gradle.kts
             sed -i 's/targetSdk = .*/targetSdk = 35/g' android/app/build.gradle.kts
             sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
+            sed -i '/android {/a ndkVersion = "26.1.10909125"' android/app/build.gradle.kts
           fi
 
           find / -name "build.gradle*" -path "*pub-cache*" 2>/dev/null | while read -r gradle_file; do

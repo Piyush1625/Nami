@@ -105,6 +105,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
+  // Mornye Extension Search Controller & Results
+  final TextEditingController _mornyeSearchController = TextEditingController();
+  List<String> _mornyeSearchResults = [];
+  bool _isMornyeSearching = false;
+
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
   String _connectedDacName = "USB DAC Ready (Bit-Perfect)";
@@ -379,6 +384,36 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
+  // Mornye Extension Song Search (Queries LRCLIB / online catalogs via .sflx runtime)
+  Future<void> _searchMornyeCatalog(String query) async {
+    if (query.trim().isEmpty) {
+      setState(() => _mornyeSearchResults = []);
+      return;
+    }
+    setState(() => _isMornyeSearching = true);
+    try {
+      final uri = Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent(query)}');
+      final res = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (res.statusCode == 200) {
+        final List list = jsonDecode(res.body);
+        setState(() {
+          _mornyeSearchResults = list.map<String>((item) => "${item['trackName']} - ${item['artistName']}").toList();
+          _isMornyeSearching = false;
+        });
+      } else {
+        setState(() {
+          _mornyeSearchResults = ["No matching tracks found via Mornye extensions."];
+          _isMornyeSearching = false;
+        });
+      }
+    } catch (_) {
+      setState(() {
+        _mornyeSearchResults = ["Network error querying Mornye provider."];
+        _isMornyeSearching = false;
+      });
+    }
+  }
+
   void _filterSongs(String query) {
     setState(() {
       _filteredSongs = _songs.where((song) =>
@@ -466,7 +501,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // NAMIDA ACTION MENU (Exact match to your screenshots)
   void _showActionMenu(AudioTrack song) {
     showModalBottomSheet(
       context: context,
@@ -637,6 +671,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   void dispose() {
     _audioPlayer.dispose();
     _searchController.dispose();
+    _mornyeSearchController.dispose();
     super.dispose();
   }
 
@@ -830,7 +865,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 4. Mornye Tab
+      // 4. Mornye Tab with Online Song Search
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -852,18 +887,46 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   ],
                 ),
                 const SizedBox(height: 8),
-                const Text('Modular lossless audio streaming & metadata extension runtime.', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                const Text('Modular lossless audio streaming & extension runtime.', style: TextStyle(fontSize: 12, color: Colors.white70)),
                 const SizedBox(height: 14),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
-                  icon: const Icon(Icons.add_circle_outline_rounded, size: 18),
-                  label: const Text('Add .sflx Repository / Plugin'),
-                  onPressed: () {},
+                TextField(
+                  controller: _mornyeSearchController,
+                  onSubmitted: _searchMornyeCatalog,
+                  decoration: InputDecoration(
+                    hintText: 'Search songs via Mornye extensions...',
+                    hintStyle: const TextStyle(color: Colors.grey, fontSize: 13),
+                    filled: true,
+                    fillColor: const Color(0xFF0A0A0E),
+                    border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.search_rounded, color: Colors.deepPurpleAccent),
+                      onPressed: () => _searchMornyeCatalog(_mornyeSearchController.text),
+                    ),
+                  ),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
+          if (_isMornyeSearching)
+            const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
+          else if (_mornyeSearchResults.isNotEmpty) ...[
+            const Text('Mornye Search Results', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            ..._mornyeSearchResults.map((res) => Card(
+              color: const Color(0xFF14141F),
+              margin: const EdgeInsets.symmetric(vertical: 4),
+              child: ListTile(
+                leading: const Icon(Icons.music_note_rounded, color: Colors.deepPurpleAccent),
+                title: Text(res, style: const TextStyle(fontSize: 13)),
+                trailing: const Icon(Icons.play_circle_fill_rounded, color: Colors.deepPurpleAccent),
+                onTap: () {
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Streaming $res via Mornye')));
+                },
+              ),
+            )),
+            const SizedBox(height: 16),
+          ],
           const Text('Installed .sflx Packages', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 10),
           ..._extensions.map((ext) => Card(

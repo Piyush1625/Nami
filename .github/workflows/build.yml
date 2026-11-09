@@ -22,7 +22,15 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Gradle Cache Engine
+      - name: Cache Android NDK & CMake
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/android/sdk/ndk
+            /usr/local/lib/android/sdk/cmake
+          key: ${{ runner.os }}-android-ndk-cmake-r26c
+
+      - name: Set up Gradle Cache
         uses: gradle/actions/setup-gradle@v3
         with:
           cache-read-only: false
@@ -34,7 +42,7 @@ jobs:
           cache: true
           cache-key: "flutter-:os:-:channel:-:version:-:arch:-:hash:"
 
-      - name: Cache Pub Dependencies
+      - name: Cache Pub Packages
         uses: actions/cache@v4
         with:
           path: |
@@ -49,6 +57,16 @@ jobs:
           if [ ! -d "android" ]; then
             flutter create --platforms=android --org com.piyush.nami --project-name nami .
           fi
+
+      - name: Inject Speed Optimizations into gradle.properties
+        run: |
+          cat << 'PROP_EOF' >> android/gradle.properties
+          org.gradle.jvmargs=-Xmx4096m -XX:+HeapDumpOnOutOfMemoryError
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          android.useAndroidX=true
+          android.enableJetifier=true
+          PROP_EOF
 
       - name: Install Flutter Dependencies
         run: flutter pub get
@@ -124,8 +142,8 @@ jobs:
           }
           KTS_EOF
 
-      - name: Build Universal Release APK
-        run: flutter build apk --release --no-tree-shake-icons
+      - name: Build Optimized ARM64 Release APK
+        run: flutter build apk --release --target-platform android-arm64 --no-tree-shake-icons
 
       - name: Upload APK to Workflow Artifacts
         uses: actions/upload-artifact@v4

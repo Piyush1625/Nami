@@ -3,11 +3,20 @@ import 'dart:typed_data';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_background/just_audio_background.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Background Audio Service for lockscreen & uninterrupted playback
+  await JustAudioBackground.init(
+    androidNotificationChannelId: 'com.piyush.nami.channel.audio',
+    androidNotificationChannelName: 'Nami Playback',
+    androidNotificationOngoing: true,
+  );
+  
   runApp(const NamiApp());
 }
 
@@ -112,7 +121,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
-  // 1. FAST PASS: Instant File Discovery (Loads in < 1 second)
   Future<void> _fastScanDeviceMusic() async {
     List<AudioTrack> foundTracks = [];
     try {
@@ -123,6 +131,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       if (await downloadDir.exists()) searchDirs.add(downloadDir);
 
       for (var dir in searchDirs) {
+        if (!await dir.exists()) continue;
         await for (var entity in dir.list(recursive: true, followLinks: false)) {
           if (entity is File) {
             String path = entity.path.toLowerCase();
@@ -137,12 +146,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 cleanName = parts.sublist(1).join(' - ').trim();
               }
 
-              foundTracks.add(AudioTrack(
-                title: cleanName,
-                artist: artist,
-                album: 'Local Audio',
-                path: entity.path,
-              ));
+              foundTracks.add(AudioTrack(title: cleanName, artist: artist, album: 'Local Audio', path: entity.path));
             }
           }
         }
@@ -159,7 +163,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       _isScanning = false;
     });
 
-    // 2. SLOW PASS: Extract Cover Art & ID3 Tags in Background
     _enrichMetadataInBackground();
   }
 
@@ -167,8 +170,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     for (int i = 0; i < _songs.length; i++) {
       if (!_songs[i].isMetadataLoaded) {
         await _extractAudioMetadata(_songs[i]);
-        if (i % 5 == 0 && mounted) {
-          setState(() {}); // Update UI every 5 songs
+        if (i % 3 == 0 && mounted) {
+          setState(() {}); // Force UI to show new images every 3 tracks processed
         }
       }
     }
@@ -179,7 +182,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     try {
       final file = File(track.path);
       final raf = await file.open(mode: FileMode.read);
-      // Read first 256KB using RandomAccessFile (Lightning fast compared to streams)
       final data = await raf.read(256 * 1024); 
       await raf.close();
 
@@ -209,16 +211,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             picOffset += 4 + descLen + 16; 
             int dataLen = (data[picOffset] << 24) | (data[picOffset + 1] << 16) | (data[picOffset + 2] << 8) | data[picOffset + 3];
             picOffset += 4;
-            if (picOffset + dataLen <= data.length) {
-              track.albumArt = data.sublist(picOffset, picOffset + dataLen);
-            }
+            if (picOffset + dataLen <= data.length) track.albumArt = data.sublist(picOffset, picOffset + dataLen);
           }
           if (isLast) break;
           offset += length;
         }
       }
 
-      // MP3 ID3v2 Parser
+      // MP3 Parser
       if (data.length > 10 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33) {
         int tagSize = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | ((data[8] & 0x7F) << 7) | (data[9] & 0x7F);
         int offset = 10;
@@ -248,7 +248,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     track.isMetadataLoaded = true;
   }
 
-  // NAMIDA-STYLE ONLINE LYRICS FETCHER
   Future<void> _fetchLyricsOnline(AudioTrack song) async {
     if (song.lyrics != "Loading lyrics...") return;
     try {
@@ -278,10 +277,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   Future<void> _playSong(AudioTrack song) async {
     if (song.path.isEmpty) return;
     try {
-      await _audioPlayer.setAudioSource(AudioSource.file(song.path));
+      // Create MediaItem for lock screen and background service
+      final mediaItem = MediaItem(
+        id: song.path,
+        album: song.album,
+        title: song.title,
+        artist: song.artist,
+      );
+
+      await _audioPlayer.setAudioSource(AudioSource.uri(
+        Uri.file(song.path),
+        tag: mediaItem,
+      ));
+      
       await _audioPlayer.play();
       setState(() => _currentSong = song);
-      _fetchLyricsOnline(song); // Fetch lyrics when song starts
+      _fetchLyricsOnline(song);
     } catch (e) {
       debugPrint('Error playing track: $e');
     }
@@ -297,6 +308,68 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         await _audioPlayer.play();
       }
     }
+  }
+
+  // NAMIDA STYLE ACTION MENU (Bottom Sheet)
+  void _showActionMenu(AudioTrack song) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14141F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Row(
+                  children: [
+                    _buildCoverArt(song, 50, 10),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(song.title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16), maxLines: 1, overflow: TextOverflow.ellipsis),
+                          Text('${song.artist} • ${song.album}', style: const TextStyle(color: Colors.grey, fontSize: 12), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        ],
+                      ),
+                    ),
+                    IconButton(icon: const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: Colors.grey), onPressed: () => Navigator.pop(context)),
+                  ],
+                ),
+              ),
+              const Divider(color: Colors.white12, height: 1),
+              _buildMenuTile(Icons.album_rounded, 'Go to Album', song.album),
+              _buildMenuTile(Icons.person_rounded, 'Go to Artist', song.artist),
+              _buildMenuTile(Icons.folder_rounded, 'Go to Folder', 'Music'),
+              _buildMenuTile(Icons.edit_note_rounded, 'Edit Tags', ''),
+              _buildMenuTile(Icons.code_rounded, 'Advanced', ''),
+              const Divider(color: Colors.white12, height: 1),
+              ListTile(
+                leading: const Icon(Icons.play_arrow_rounded, color: Colors.deepPurpleAccent),
+                title: const Text('Play Next'),
+                onTap: () {
+                  Navigator.pop(context);
+                  ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added ${song.title} to play next')));
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildMenuTile(IconData icon, String title, String subtitle) {
+    return ListTile(
+      leading: Icon(icon, color: Colors.white70),
+      title: Text(title, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w500)),
+      subtitle: subtitle.isNotEmpty ? Text(subtitle, style: const TextStyle(fontSize: 11, color: Colors.grey)) : null,
+      trailing: const Icon(Icons.add, color: Colors.white70, size: 20),
+      onTap: () {},
+    );
   }
 
   void _showNowPlayingScreen() {
@@ -333,7 +406,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (song.albumArt != null) {
       return ClipRRect(
         borderRadius: BorderRadius.circular(radius),
-        child: Image.memory(song.albumArt!, width: size, height: size, fit: BoxFit.cover),
+        child: Image.memory(
+          song.albumArt!, 
+          width: size, 
+          height: size, 
+          fit: BoxFit.cover,
+          cacheWidth: (size * 2).toInt(), // Optimizes memory so large arts don't lag
+        ),
       );
     }
     return Container(
@@ -391,6 +470,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   final song = _songs[index];
                   return GestureDetector(
                     onTap: () => _playSong(song),
+                    onLongPress: () => _showActionMenu(song),
                     child: Container(
                       width: 110,
                       margin: const EdgeInsets.only(right: 12),
@@ -431,8 +511,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                             style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
                           ),
                           subtitle: Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                          trailing: const Icon(Icons.play_circle_fill_rounded, color: Colors.deepPurpleAccent, size: 28),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.more_vert_rounded, color: Colors.grey),
+                            onPressed: () => _showActionMenu(song),
+                          ),
                           onTap: () => _playSong(song),
+                          onLongPress: () => _showActionMenu(song),
                         );
                       },
                     )))
@@ -529,7 +613,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 style: const TextStyle(color: Colors.white, fontSize: 16),
               )
             : Text(
-                _selectedIndex == 0 ? 'Namida' : (_selectedIndex == 1 ? 'Tracks' : (_selectedIndex == 2 ? 'Artists' : 'Playlists')),
+                _selectedIndex == 0 ? 'Nami' : (_selectedIndex == 1 ? 'Tracks' : (_selectedIndex == 2 ? 'Artists' : 'Playlists')),
                 style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.5),
               ),
         actions: [
@@ -665,7 +749,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 // REAL INTERACTIVE SETTINGS SCREENS
 class MainSettingsScreen extends StatelessWidget {
   const MainSettingsScreen({super.key});
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -680,7 +763,6 @@ class MainSettingsScreen extends StatelessWidget {
       ),
     );
   }
-
   Widget _buildSettingTile(BuildContext context, IconData icon, String title, String subtitle, Widget screen) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(vertical: 8),
@@ -692,11 +774,9 @@ class MainSettingsScreen extends StatelessWidget {
     );
   }
 }
-
 class IndexerSettingsScreen extends StatefulWidget { const IndexerSettingsScreen({super.key}); @override State<IndexerSettingsScreen> createState() => _IndexerSettingsState(); }
 class _IndexerSettingsState extends State<IndexerSettingsScreen> {
-  bool autoScan = true;
-  bool skipShort = true;
+  bool autoScan = true; bool skipShort = true;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -705,17 +785,14 @@ class _IndexerSettingsState extends State<IndexerSettingsScreen> {
         children: [
           SwitchListTile(title: const Text('Auto-scan on startup'), subtitle: const Text('Check for new files automatically'), value: autoScan, activeColor: Colors.deepPurpleAccent, onChanged: (v) => setState(() => autoScan = v)),
           SwitchListTile(title: const Text('Ignore short tracks'), subtitle: const Text('Skip audio files under 30 seconds'), value: skipShort, activeColor: Colors.deepPurpleAccent, onChanged: (v) => setState(() => skipShort = v)),
-          ListTile(title: const Text('Force Full Rescan'), leading: const Icon(Icons.refresh_rounded), onTap: () { ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Rescan initiated...'))); }),
         ],
       ),
     );
   }
 }
-
 class PlaybackSettingsScreen extends StatefulWidget { const PlaybackSettingsScreen({super.key}); @override State<PlaybackSettingsScreen> createState() => _PlaybackSettingsState(); }
 class _PlaybackSettingsState extends State<PlaybackSettingsScreen> {
-  bool gapless = true;
-  bool exclusiveDac = false;
+  bool gapless = true; bool exclusiveDac = false;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -729,11 +806,9 @@ class _PlaybackSettingsState extends State<PlaybackSettingsScreen> {
     );
   }
 }
-
 class ThemeSettingsScreen extends StatefulWidget { const ThemeSettingsScreen({super.key}); @override State<ThemeSettingsScreen> createState() => _ThemeSettingsState(); }
 class _ThemeSettingsState extends State<ThemeSettingsScreen> {
-  bool amoled = true;
-  bool materialYou = false;
+  bool amoled = true; bool materialYou = false;
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -741,7 +816,6 @@ class _ThemeSettingsState extends State<ThemeSettingsScreen> {
       body: ListView(
         children: [
           SwitchListTile(title: const Text('Pitch Black (AMOLED)'), subtitle: const Text('Use pure black background for battery saving'), value: amoled, activeColor: Colors.deepPurpleAccent, onChanged: (v) => setState(() => amoled = v)),
-          SwitchListTile(title: const Text('Dynamic Colors (Material You)'), subtitle: const Text('Match UI colors with album art or system wallpaper'), value: materialYou, activeColor: Colors.deepPurpleAccent, onChanged: (v) => setState(() => materialYou = v)),
         ],
       ),
     );
@@ -805,7 +879,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           child: ClipRRect(
                             borderRadius: BorderRadius.circular(24),
                             child: widget.currentSong?.albumArt != null 
-                                ? Image.memory(widget.currentSong!.albumArt!, fit: BoxFit.cover)
+                                ? Image.memory(widget.currentSong!.albumArt!, fit: BoxFit.cover, cacheWidth: 520)
                                 : Container(color: Colors.purple.shade900, child: const Icon(Icons.album_rounded, size: 90, color: Colors.white70)),
                           ),
                         ),

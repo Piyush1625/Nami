@@ -109,13 +109,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
-  // Mornye Extension Search Controller & Results
   final TextEditingController _mornyeSearchController = TextEditingController();
   List<String> _mornyeSearchResults = [];
   bool _isMornyeSearching = false;
 
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
+  bool _mediaNotificationEnabled = true; // Namida notification toggle
   String _connectedDacName = "USB DAC Ready (Bit-Perfect)";
   String _topRecentFilter = "1 Day";
 
@@ -418,11 +418,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
+  // Improved Search Logic covering Track Titles, Artists, and Albums
   void _filterSongs(String query) {
+    final q = query.toLowerCase();
     setState(() {
       _filteredSongs = _songs.where((song) =>
-        song.title.toLowerCase().contains(query.toLowerCase()) ||
-        song.artist.toLowerCase().contains(query.toLowerCase())
+        song.title.toLowerCase().contains(q) ||
+        song.artist.toLowerCase().contains(q) ||
+        song.album.toLowerCase().contains(q)
       ).toList();
     });
   }
@@ -581,7 +584,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Namida-style Detailed Artist Page
+  // Detailed Artist Page with Mini Player included at the bottom
   void _showArtistDetailScreen(String artistName, List<AudioTrack> artistTracks) {
     final firstArt = artistTracks.firstWhere((s) => s.albumArt != null, orElse: () => artistTracks.first).albumArt;
     
@@ -597,67 +600,108 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               IconButton(icon: const Icon(Icons.more_vert_rounded), onPressed: () {}),
             ],
           ),
-          body: ListView(
-            padding: const EdgeInsets.all(16),
+          body: Stack(
             children: [
-              Center(
-                child: Column(
-                  children: [
-                    CircleAvatar(
-                      radius: 54,
-                      backgroundColor: Colors.deepPurple.withOpacity(0.3),
-                      backgroundImage: firstArt != null ? MemoryImage(firstArt) : null,
-                      child: firstArt == null ? const Icon(Icons.person_rounded, size: 50, color: Colors.deepPurpleAccent) : null,
-                    ),
-                    const SizedBox(height: 14),
-                    Text(artistName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                    const SizedBox(height: 4),
-                    const Text('2018 – 2026', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 20),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              ListView(
+                padding: const EdgeInsets.fromLTRB(16, 16, 16, 110),
                 children: [
-                  _artistActionButton(Icons.shuffle_rounded, 'Shuffle', _shufflePlay),
-                  _artistActionButton(Icons.play_arrow_rounded, 'Play', () { if (artistTracks.isNotEmpty) _playSong(artistTracks.first); }),
-                  _artistActionButton(Icons.radio_rounded, 'Radio', () {}),
-                  _artistActionButton(Icons.more_horiz_rounded, 'More', () {}),
+                  Center(
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 54,
+                          backgroundColor: Colors.deepPurple.withOpacity(0.3),
+                          backgroundImage: firstArt != null ? MemoryImage(firstArt) : null,
+                          child: firstArt == null ? const Icon(Icons.person_rounded, size: 50, color: Colors.deepPurpleAccent) : null,
+                        ),
+                        const SizedBox(height: 14),
+                        Text(artistName, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 4),
+                        const Text('2018 – 2026', style: TextStyle(color: Colors.grey, fontSize: 13)),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      _artistActionButton(Icons.shuffle_rounded, 'Shuffle', _shufflePlay),
+                      _artistActionButton(Icons.play_arrow_rounded, 'Play', () { if (artistTracks.isNotEmpty) _playSong(artistTracks.first); }),
+                      _artistActionButton(Icons.radio_rounded, 'Radio', () {}),
+                      _artistActionButton(Icons.more_horiz_rounded, 'More', () {}),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  _artistCategoryCard(Icons.album_rounded, 'Albums: 3'),
+                  const SizedBox(height: 12),
+                  _artistCategoryCard(Icons.library_music_rounded, 'Singles: ${artistTracks.length}'),
+                  const SizedBox(height: 24),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.between,
+                    children: [
+                      Text('${artistTracks.length} Tracks - 30min', style: const TextStyle(color: Colors.grey, fontSize: 13)),
+                      const Row(children: [Text('Year ', style: TextStyle(color: Colors.grey, fontSize: 13)), Icon(Icons.arrow_drop_down, color: Colors.grey)]),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  ...artistTracks.map((song) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: _buildCoverArt(song, 48, 8),
+                    title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
+                    subtitle: Text('${song.artist} • ${song.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                        const SizedBox(width: 4),
+                        IconButton(
+                          icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 20),
+                          onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
+                        ),
+                        IconButton(icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 20), onPressed: () => _showActionMenu(song)),
+                      ],
+                    ),
+                    onTap: () => _playSong(song),
+                  )),
                 ],
               ),
-              const SizedBox(height: 24),
-              _artistCategoryCard(Icons.album_rounded, 'Albums: 3'),
-              const SizedBox(height: 12),
-              _artistCategoryCard(Icons.library_music_rounded, 'Singles: ${artistTracks.length}'),
-              const SizedBox(height: 24),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text('${artistTracks.length} Tracks - 30min', style: const TextStyle(color: Colors.grey, fontSize: 13)),
-                  const Row(children: [Text('Year ', style: TextStyle(color: Colors.grey, fontSize: 13)), Icon(Icons.arrow_drop_down, color: Colors.grey)]),
-                ],
-              ),
-              const SizedBox(height: 12),
-              ...artistTracks.map((song) => ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: _buildCoverArt(song, 48, 8),
-                title: Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold)),
-                subtitle: Text('${song.artist} • ${song.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
-                trailing: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                    const SizedBox(width: 8),
-                    IconButton(
-                      icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 20),
-                      onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
+              // Mini Player attached at bottom of artist page
+              Positioned(
+                left: 12,
+                right: 12,
+                bottom: 10,
+                child: GestureDetector(
+                  onTap: _showNowPlayingScreen,
+                  child: Container(
+                    height: 64,
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1A1A26).withOpacity(0.95),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.deepPurpleAccent.withOpacity(0.4)),
                     ),
-                    IconButton(icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 20), onPressed: () => _showActionMenu(song)),
-                  ],
+                    child: Row(
+                      children: [
+                        if (_currentSong != null) _buildCoverArt(_currentSong!, 38, 8)
+                        else const Icon(Icons.album_rounded, size: 38, color: Colors.deepPurpleAccent),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(_currentSong?.title ?? 'No Track Playing', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                              Text(_currentSong?.artist ?? 'Lossless Ready', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                            ],
+                          ),
+                        ),
+                        IconButton(icon: Icon(_isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 28), onPressed: _togglePlayPause),
+                        IconButton(icon: const Icon(Icons.skip_next_rounded, size: 24), onPressed: _playNextTrack),
+                      ],
+                    ),
+                  ),
                 ),
-                onTap: () => _playSong(song),
-              )),
+              ),
             ],
           ),
         ),
@@ -755,9 +799,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         builder: (context) => MainSettingsScreen(
           usbDacExclusive: _usbDacExclusive,
           gaplessPlayback: _gaplessPlayback,
+          mediaNotificationEnabled: _mediaNotificationEnabled,
           connectedDacName: _connectedDacName,
           onUsbDacChanged: _toggleUsbDacMode,
           onGaplessChanged: (v) => setState(() => _gaplessPlayback = v),
+          onNotificationChanged: (v) => setState(() => _mediaNotificationEnabled = v),
           onRescan: _fastScanDeviceMusic,
         ),
       ),
@@ -926,7 +972,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 1. Tracks Page (Track Count on Top, Shuffle, Favorite & Runtime)
+      // 1. Tracks Page (Track Count badge, Shuffle, tighter spacing for Heart, Time & 3-dots)
       _hasPermission
           ? (_isScanning 
               ? const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
@@ -968,6 +1014,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                               final song = _filteredSongs[index];
                               final isCurrent = _currentSong?.path == song.path;
                               return ListTile(
+                                horizontalTitleGap: 12,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
                                 leading: _buildCoverArt(song, 48, 8),
                                 title: Text(
                                   song.title,
@@ -976,20 +1024,28 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                                   style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
                                 ),
                                 subtitle: Text('${song.artist} • ${song.album}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                                trailing: Row(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
-                                    const SizedBox(width: 8),
-                                    IconButton(
-                                      icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 20),
-                                      onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
-                                    ),
-                                    IconButton(
-                                      icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 20),
-                                      onPressed: () => _showActionMenu(song),
-                                    ),
-                                  ],
+                                trailing: SizedBox(
+                                  width: 130,
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(_formatDuration(song.duration), style: const TextStyle(color: Colors.grey, fontSize: 11)),
+                                      const SizedBox(width: 2),
+                                      IconButton(
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        padding: EdgeInsets.zero,
+                                        icon: Icon(song.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: song.isFavorite ? Colors.deepPurpleAccent : Colors.grey, size: 18),
+                                        onPressed: () => setState(() => song.isFavorite = !song.isFavorite),
+                                      ),
+                                      IconButton(
+                                        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+                                        padding: EdgeInsets.zero,
+                                        icon: const Icon(Icons.more_vert_rounded, color: Colors.grey, size: 18),
+                                        onPressed: () => _showActionMenu(song),
+                                      ),
+                                    ],
+                                  ),
                                 ),
                                 onTap: () => _playSong(song),
                                 onLongPress: () => _showActionMenu(song),
@@ -1036,7 +1092,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         },
       ),
 
-      // 3. Playlists Page (Open-Source Library / Mood Maker)
+      // 3. Playlists Page
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -1173,7 +1229,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 controller: _searchController,
                 autofocus: true,
                 onChanged: _filterSongs,
-                decoration: const InputDecoration(hintText: 'Search tracks...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey)),
+                decoration: const InputDecoration(hintText: 'Search tracks, artists, albums...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey)),
                 style: const TextStyle(color: Colors.white, fontSize: 16),
               )
             : Text(
@@ -1308,18 +1364,22 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 class MainSettingsScreen extends StatelessWidget {
   final bool usbDacExclusive;
   final bool gaplessPlayback;
+  final bool mediaNotificationEnabled;
   final String connectedDacName;
   final ValueChanged<bool> onUsbDacChanged;
   final ValueChanged<bool> onGaplessChanged;
+  final ValueChanged<bool> onNotificationChanged;
   final VoidCallback onRescan;
 
   const MainSettingsScreen({
     super.key,
     required this.usbDacExclusive,
     required this.gaplessPlayback,
+    required this.mediaNotificationEnabled,
     required this.connectedDacName,
     required this.onUsbDacChanged,
     required this.onGaplessChanged,
+    required this.onNotificationChanged,
     required this.onRescan,
   });
 
@@ -1354,6 +1414,14 @@ class MainSettingsScreen extends StatelessWidget {
                   value: gaplessPlayback,
                   activeColor: Colors.deepPurpleAccent,
                   onChanged: onGaplessChanged,
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Media Notification Manager'),
+                  subtitle: const Text('Show live playback card in system quick-settings'),
+                  value: mediaNotificationEnabled,
+                  activeColor: Colors.deepPurpleAccent,
+                  onChanged: onNotificationChanged,
                 ),
               ],
             ),
@@ -1401,7 +1469,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Cover Art + Waveform Seekbar, 1 = Synced Lyrics, 2 = Mornye
+  int _viewMode = 0;
 
   @override
   Widget build(BuildContext context) {
@@ -1474,7 +1542,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
             ),
           ),
           
-          // Waveform Visualizer Seekbar Stream
           StreamBuilder<Duration>(
             stream: widget.audioPlayer.positionStream,
             builder: (context, positionSnapshot) {
@@ -1490,7 +1557,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
                   return Column(
                     children: [
-                      // Custom Waveform Bar Representation
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         child: Row(

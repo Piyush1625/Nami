@@ -223,7 +223,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // 0. Home Feed (Matches Screenshot 1)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
@@ -259,10 +258,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                       children: [
                         Container(
                           height: 100,
-                          decoration: BoxDecoration(
-                            color: Colors.deepPurple.withOpacity(0.3),
-                            borderRadius: BorderRadius.circular(12),
-                          ),
+                          decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.3), borderRadius: BorderRadius.circular(12)),
                           child: const Center(child: Icon(Icons.music_note_rounded, size: 36, color: Colors.deepPurpleAccent)),
                         ),
                         const SizedBox(height: 6),
@@ -286,8 +282,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           ),
         ],
       ),
-
-      // 1. Tracks Page
       _hasPermission
           ? (_filteredSongs.isEmpty
               ? const Center(child: Text('No matching audio files found.', style: TextStyle(color: Colors.grey)))
@@ -323,8 +317,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 child: const Text('Grant Storage Permission'),
               ),
             ),
-
-      // 2. Artists Page (Matches Screenshot 2)
       GridView.builder(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.8, crossAxisSpacing: 12, mainAxisSpacing: 12),
@@ -343,8 +335,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           );
         },
       ),
-
-      // 3. Playlists Page (Matches Screenshot 3)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -356,7 +346,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
                 icon: const Icon(Icons.add, size: 16),
                 label: const Text('Add'),
-                onPressed: {},
+                onPressed: () {},
               ),
             ],
           ),
@@ -607,7 +597,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye Extensions
+  int _viewMode = 0;
 
   @override
   Widget build(BuildContext context) {

@@ -10,12 +10,17 @@ import 'package:http/http.dart' as http;
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
-  // Initialize Background Audio Service for lockscreen & uninterrupted playback
-  await JustAudioBackground.init(
-    androidNotificationChannelId: 'com.piyush.nami.channel.audio',
-    androidNotificationChannelName: 'Nami Playback',
-    androidNotificationOngoing: true,
-  );
+  // Anti-deadlock safety net: Catch exceptions and timeout so runApp() always executes
+  try {
+    await JustAudioBackground.init(
+      androidNotificationChannelId: 'com.piyush.nami.channel.audio',
+      androidNotificationChannelName: 'Nami Playback',
+      androidNotificationOngoing: true,
+      androidNotificationIcon: 'mipmap/ic_launcher', // Explicitly define icon to prevent native crashes
+    ).timeout(const Duration(seconds: 3));
+  } catch (e) {
+    debugPrint('Background audio init bypassed: $e');
+  }
   
   runApp(const NamiApp());
 }
@@ -100,7 +105,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   @override
   void initState() {
     super.initState();
-    _requestPermissionAndScanMusic();
+    
+    // Safely wait for the first frame to render before bombarding Android with permission requests
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _requestPermissionAndScanMusic();
+    });
     
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) setState(() => _isPlaying = state.playing);
@@ -170,9 +179,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     for (int i = 0; i < _songs.length; i++) {
       if (!_songs[i].isMetadataLoaded) {
         await _extractAudioMetadata(_songs[i]);
-        if (i % 3 == 0 && mounted) {
-          setState(() {}); // Force UI to show new images every 3 tracks processed
-        }
+        if (i % 3 == 0 && mounted) setState(() {});
       }
     }
     if (mounted) setState(() {});
@@ -185,7 +192,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       final data = await raf.read(256 * 1024); 
       await raf.close();
 
-      // FLAC Parser
       if (data.length > 4 && data[0] == 0x66 && data[1] == 0x4C && data[2] == 0x61 && data[3] == 0x43) {
         int offset = 4;
         while (offset + 4 < data.length) {
@@ -218,7 +224,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
       }
 
-      // MP3 Parser
       if (data.length > 10 && data[0] == 0x49 && data[1] == 0x44 && data[2] == 0x33) {
         int tagSize = ((data[6] & 0x7F) << 21) | ((data[7] & 0x7F) << 14) | ((data[8] & 0x7F) << 7) | (data[9] & 0x7F);
         int offset = 10;
@@ -277,7 +282,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   Future<void> _playSong(AudioTrack song) async {
     if (song.path.isEmpty) return;
     try {
-      // Create MediaItem for lock screen and background service
       final mediaItem = MediaItem(
         id: song.path,
         album: song.album,
@@ -310,7 +314,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
-  // NAMIDA STYLE ACTION MENU (Bottom Sheet)
   void _showActionMenu(AudioTrack song) {
     showModalBottomSheet(
       context: context,
@@ -411,7 +414,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           width: size, 
           height: size, 
           fit: BoxFit.cover,
-          cacheWidth: (size * 2).toInt(), // Optimizes memory so large arts don't lag
+          cacheWidth: (size * 2).toInt(),
         ),
       );
     }
@@ -746,7 +749,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 }
 
-// REAL INTERACTIVE SETTINGS SCREENS
 class MainSettingsScreen extends StatelessWidget {
   const MainSettingsScreen({super.key});
   @override

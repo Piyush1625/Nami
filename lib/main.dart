@@ -206,6 +206,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
+  void _openSettings() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const SettingsScreen()),
+    );
+  }
+
   @override
   void dispose() {
     _audioPlayer.dispose();
@@ -215,8 +222,72 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 
   @override
   Widget build(BuildContext context) {
-    // Clean 2-Tab Navigation (Tracks & Audio/DAC Settings) keeping UI clean like Namida
     final List<Widget> pages = [
+      // 0. Home Feed (Matches Screenshot 1)
+      ListView(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
+        children: [
+          const Text('Mixes', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 180,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                _buildMixCard('Recommended', 'Local FLAC & Hi-Fi Mix', Colors.deepPurple),
+                _buildMixCard('Top Listens', 'Most Played Tracks', Colors.purpleAccent),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 140,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              itemCount: _songs.length > 5 ? 5 : _songs.length,
+              itemBuilder: (context, index) {
+                final song = _songs[index];
+                return GestureDetector(
+                  onTap: () => _playSong(song),
+                  child: Container(
+                    width: 110,
+                    margin: const EdgeInsets.only(right: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          height: 100,
+                          decoration: BoxDecoration(
+                            color: Colors.deepPurple.withOpacity(0.3),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: const Center(child: Icon(Icons.music_note_rounded, size: 36, color: Colors.deepPurpleAccent)),
+                        ),
+                        const SizedBox(height: 6),
+                        Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          const SizedBox(height: 24),
+          const Text('Top Recents', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            children: ['1 Day', '3 Days', '6 Days', '9 Days', '12 Days'].map((tag) => Chip(
+              backgroundColor: const Color(0xFF1A1A26),
+              label: Text(tag, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            )).toList(),
+          ),
+        ],
+      ),
+
+      // 1. Tracks Page
       _hasPermission
           ? (_filteredSongs.isEmpty
               ? const Center(child: Text('No matching audio files found.', style: TextStyle(color: Colors.grey)))
@@ -230,66 +301,93 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                       leading: Container(
                         width: 48,
                         height: 48,
-                        decoration: BoxDecoration(
-                          color: Colors.deepPurple.withOpacity(0.2),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                        decoration: BoxDecoration(color: Colors.deepPurple.withOpacity(0.2), borderRadius: BorderRadius.circular(8)),
                         child: const Icon(Icons.music_note_rounded, color: Colors.deepPurpleAccent),
                       ),
                       title: Text(
                         song.title,
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
-                        style: TextStyle(
-                          fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal,
-                          color: isCurrent ? Colors.deepPurpleAccent : Colors.white,
-                        ),
+                        style: TextStyle(fontWeight: isCurrent ? FontWeight.bold : FontWeight.normal, color: isCurrent ? Colors.deepPurpleAccent : Colors.white),
                       ),
-                      subtitle: Text(
-                        song.artist,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.grey, fontSize: 12),
-                      ),
+                      subtitle: Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(color: Colors.grey, fontSize: 12)),
                       trailing: const Icon(Icons.play_circle_fill_rounded, color: Colors.deepPurpleAccent, size: 28),
                       onTap: () => _playSong(song),
                     );
                   },
                 ))
           : Center(
-              child: Padding(
-                padding: const EdgeInsets.all(24.0),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Text('Storage permission is required to scan your music library.', textAlign: TextAlign.center, style: TextStyle(color: Colors.grey)),
-                    const SizedBox(height: 16),
-                    ElevatedButton(
-                      style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
-                      onPressed: _requestPermissionAndScanMusic,
-                      child: const Text('Grant Permission'),
-                    ),
-                  ],
-                ),
+              child: ElevatedButton(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
+                onPressed: _requestPermissionAndScanMusic,
+                child: const Text('Grant Storage Permission'),
               ),
             ),
-      
-      // Audio/DAC Settings Tab
+
+      // 2. Artists Page (Matches Screenshot 2)
+      GridView.builder(
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
+        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(crossAxisCount: 3, childAspectRatio: 0.8, crossAxisSpacing: 12, mainAxisSpacing: 12),
+        itemCount: 6,
+        itemBuilder: (context, index) {
+          return Column(
+            children: [
+              CircleAvatar(
+                radius: 36,
+                backgroundColor: Colors.deepPurple.withOpacity(0.3),
+                child: const Icon(Icons.person_rounded, size: 32, color: Colors.deepPurpleAccent),
+              ),
+              const SizedBox(height: 6),
+              Text('Artist ${index + 1}', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+            ],
+          );
+        },
+      ),
+
+      // 3. Playlists Page (Matches Screenshot 3)
       ListView(
-        padding: const EdgeInsets.all(16),
-        children: const [
-          Text('Audio & USB DAC Settings', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-          SizedBox(height: 16),
-          ListTile(
-            leading: Icon(Icons.usb_rounded, color: Colors.deepPurpleAccent),
-            title: Text('Bit-Perfect USB DAC Routing'),
-            subtitle: Text('Bypass Android Resampler (Exclusive Mode active)'),
-            trailing: Icon(Icons.check_circle_rounded, color: Colors.greenAccent),
+        padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('1 Playlist', style: TextStyle(color: Colors.grey, fontSize: 13)),
+              ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent, padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                icon: const Icon(Icons.add, size: 16),
+                label: const Text('Add'),
+                onPressed: {},
+              ),
+            ],
           ),
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              _buildPlaylistStatCard('History', '778', Icons.history),
+              const SizedBox(width: 12),
+              _buildPlaylistStatCard('Most Played', '342', Icons.trending_up),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              _buildPlaylistStatCard('Favourites', '3', Icons.favorite),
+              const SizedBox(width: 12),
+              _buildPlaylistStatCard('Queues', '217', Icons.queue_music),
+            ],
+          ),
+          const SizedBox(height: 24),
           ListTile(
-            leading: Icon(Icons.equalizer_rounded, color: Colors.deepPurpleAccent),
-            title: Text('Parametric Equalizer'),
-            subtitle: Text('10-band hardware DSP curve'),
+            contentPadding: EdgeInsets.zero,
+            leading: Container(
+              width: 50,
+              height: 50,
+              decoration: BoxDecoration(color: Colors.purple.shade900, borderRadius: BorderRadius.circular(10)),
+              child: const Icon(Icons.album_rounded, color: Colors.white),
+            ),
+            title: const Text('classic✨', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: const Text('3 Tracks • 14min', style: TextStyle(fontSize: 11, color: Colors.grey)),
+            trailing: const Icon(Icons.more_vert_rounded, color: Colors.grey),
           ),
         ],
       ),
@@ -304,16 +402,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 controller: _searchController,
                 autofocus: true,
                 onChanged: _filterSongs,
-                decoration: const InputDecoration(
-                  hintText: 'Search tracks or artists...',
-                  border: InputBorder.none,
-                  hintStyle: TextStyle(color: Colors.grey),
-                ),
+                decoration: const InputDecoration(hintText: 'Search music...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey)),
                 style: const TextStyle(color: Colors.white, fontSize: 16),
               )
-            : const Text(
-                'NAMI',
-                style: TextStyle(fontWeight: FontWeight.w800, letterSpacing: 2.0),
+            : Text(
+                _selectedIndex == 0 ? 'Namida' : (_selectedIndex == 1 ? 'Tracks' : (_selectedIndex == 2 ? 'Artists' : 'Playlists')),
+                style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.5),
               ),
         actions: [
           IconButton(
@@ -329,14 +423,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.equalizer_rounded),
-            onPressed: () => setState(() => _selectedIndex = 1),
+            icon: const Icon(Icons.settings_rounded),
+            onPressed: _openSettings,
           ),
         ],
       ),
       body: Stack(
         children: [
-          pages[_selectedIndex == 0 ? 0 : 1],
+          pages[_selectedIndex],
           Positioned(
             left: 12,
             right: 12,
@@ -350,13 +444,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   color: const Color(0xFF1A1A26).withOpacity(0.95),
                   borderRadius: BorderRadius.circular(20),
                   border: Border.all(color: Colors.deepPurpleAccent.withOpacity(0.4)),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.deepPurpleAccent.withOpacity(0.15),
-                      blurRadius: 16,
-                      spreadRadius: 2,
-                    ),
-                  ],
+                  boxShadow: [BoxShadow(color: Colors.deepPurpleAccent.withOpacity(0.15), blurRadius: 16, spreadRadius: 2)],
                 ),
                 child: Row(
                   children: [
@@ -367,18 +455,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         mainAxisAlignment: MainAxisAlignment.center,
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(
-                            _currentSong?.title ?? 'No Track Playing',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
-                          ),
-                          Text(
-                            _currentSong != null ? 'Playing Lossless Audio' : '24-bit / Lossless FLAC Ready',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(fontSize: 11, color: Colors.grey),
-                          ),
+                          Text(_currentSong?.title ?? 'No Track Playing', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                          Text(_currentSong != null ? 'Playing Lossless Audio' : '24-bit / Lossless FLAC Ready', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
                         ],
                       ),
                     ),
@@ -404,13 +482,100 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       ),
       bottomNavigationBar: NavigationBar(
         backgroundColor: const Color(0xFF0F0F16),
-        selectedIndex: _selectedIndex == 0 ? 0 : 1,
+        selectedIndex: _selectedIndex,
         onDestinationSelected: (idx) => setState(() => _selectedIndex = idx),
         destinations: const [
+          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
-          NavigationDestination(icon: Icon(Icons.tune_outlined), selectedIcon: Icon(Icons.tune_rounded), label: 'Audio/DAC'),
+          NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Artists'),
+          NavigationDestination(icon: Icon(Icons.playlist_play_rounded), selectedIcon: Icon(Icons.playlist_add_check_rounded), label: 'Playlists'),
         ],
       ),
+    );
+  }
+
+  Widget _buildMixCard(String title, String subtitle, Color color) {
+    return Container(
+      width: 160,
+      margin: const EdgeInsets.only(right: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(color: color.withOpacity(0.2), borderRadius: BorderRadius.circular(16)),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(Icons.album_rounded, size: 40, color: color),
+          const SizedBox(height: 12),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+          const SizedBox(height: 4),
+          Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlaylistStatCard(String title, String count, IconData icon) {
+    return Expanded(
+      child: Container(
+        padding: const EdgeInsets.all(14),
+        decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(16)),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(icon, color: Colors.deepPurpleAccent, size: 20),
+                const SizedBox(height: 8),
+                Text(title, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+              ],
+            ),
+            Text(count, style: const TextStyle(fontSize: 16, color: Colors.grey)),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class SettingsScreen extends StatelessWidget {
+  const SettingsScreen({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        title: const Text('Settings', style: TextStyle(fontWeight: FontWeight.bold)),
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          _buildSettingTile(Icons.folder_outlined, 'Add Folder', 'Local, (Open) Subsonic, Jellyfin, WebDAV...'),
+          _buildSettingTile(Icons.people_outline_rounded, 'Listening party', 'Listen together with others, in sync'),
+          _buildSettingTile(Icons.palette_outlined, 'Theme', 'The overall vibe of your player'),
+          _buildSettingTile(Icons.library_books_outlined, 'Indexer', 'Manage your music Library'),
+          _buildSettingTile(Icons.play_circle_outline_rounded, 'Playback', 'Can be accessed directly in the player by long pressing audio button'),
+          _buildSettingTile(Icons.tune_rounded, 'Customizations', 'Customize how your player looks, make it yours'),
+          _buildSettingTile(Icons.video_library_outlined, 'YouTube', 'Customize YouTube experience'),
+          _buildSettingTile(Icons.extension_outlined, 'Extras', 'Extra Settings to fine your experience'),
+          _buildSettingTile(Icons.backup_outlined, 'Backup & Restore', 'Backup your database and settings'),
+          _buildSettingTile(Icons.admin_panel_settings_outlined, 'Advanced', 'Advanced Settings, don\'t touch'),
+          _buildSettingTile(Icons.info_outline_rounded, 'About', 'App information and version details'),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSettingTile(IconData icon, String title, String subtitle) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(vertical: 4),
+      leading: Icon(icon, color: Colors.deepPurpleAccent),
+      title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
+      subtitle: Text(subtitle, style: const TextStyle(color: Colors.grey, fontSize: 12)),
+      trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+      onTap: () {},
     );
   }
 }
@@ -442,8 +607,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  // View Modes: 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye Extensions
-  int _viewMode = 0;
+  int _viewMode = 0; // 0 = Cover Art, 1 = Synced Lyrics, 2 = Mornye Extensions
 
   @override
   Widget build(BuildContext context) {
@@ -458,30 +622,15 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
         children: [
           Container(width: 40, height: 4, decoration: BoxDecoration(color: Colors.grey.withOpacity(0.4), borderRadius: BorderRadius.circular(2))),
           const SizedBox(height: 16),
-          // Top bar switching view modes behind cover art (Namida style)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              IconButton(
-                icon: Icon(Icons.album_rounded, color: _viewMode == 0 ? Colors.deepPurpleAccent : Colors.grey),
-                onPressed: () => setState(() => _viewMode = 0),
-                tooltip: 'Cover Art',
-              ),
-              IconButton(
-                icon: Icon(Icons.lyrics_rounded, color: _viewMode == 1 ? Colors.deepPurpleAccent : Colors.grey),
-                onPressed: () => setState(() => _viewMode = 1),
-                tooltip: 'Synced Lyrics',
-              ),
-              IconButton(
-                icon: Icon(Icons.extension_rounded, color: _viewMode == 2 ? Colors.deepPurpleAccent : Colors.grey),
-                onPressed: () => setState(() => _viewMode = 2),
-                tooltip: 'Mornye Extensions',
-              ),
+              IconButton(icon: Icon(Icons.album_rounded, color: _viewMode == 0 ? Colors.deepPurpleAccent : Colors.grey), onPressed: () => setState(() => _viewMode = 0)),
+              IconButton(icon: Icon(Icons.lyrics_rounded, color: _viewMode == 1 ? Colors.deepPurpleAccent : Colors.grey), onPressed: () => setState(() => _viewMode = 1)),
+              IconButton(icon: Icon(Icons.extension_rounded, color: _viewMode == 2 ? Colors.deepPurpleAccent : Colors.grey), onPressed: () => setState(() => _viewMode = 2)),
             ],
           ),
           const SizedBox(height: 16),
-          
-          // Dynamic Center Display (Cover Art vs Lyrics vs Extensions)
           Expanded(
             child: Center(
               child: _viewMode == 0
@@ -532,7 +681,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                         ),
             ),
           ),
-
           Slider(
             activeColor: Colors.deepPurpleAccent,
             inactiveColor: Colors.white12,
@@ -554,10 +702,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
             children: [
               IconButton(icon: const Icon(Icons.shuffle_rounded), onPressed: () {}),
               IconButton(icon: const Icon(Icons.skip_previous_rounded, size: 32), onPressed: () {}),
-              IconButton(
-                icon: Icon(widget.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent),
-                onPressed: widget.onPlayPause,
-              ),
+              IconButton(icon: Icon(widget.isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_filled_rounded, size: 64, color: Colors.deepPurpleAccent), onPressed: widget.onPlayPause),
               IconButton(icon: const Icon(Icons.skip_next_rounded, size: 32), onPressed: widget.onNext),
               IconButton(icon: const Icon(Icons.repeat_rounded), onPressed: () {}),
             ],

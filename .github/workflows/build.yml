@@ -46,44 +46,10 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pub-
 
-      - name: Ensure Persistent Release Keystore Exists
-        run: |
-          if [ ! -f "nami-release.jks" ]; then
-            echo "Generating permanent release keystore..."
-            keytool -genkey -v -keystore nami-release.jks \
-              -keyalg RSA -keysize 2048 -validity 10000 \
-              -alias nami -storepass namipass123 -keypass namipass123 \
-              -dname "CN=Piyush, OU=Nami, O=Nami, L=Delhi, S=Delhi, C=IN"
-
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add nami-release.jks
-            git commit -m "ci: persist permanent release signing key [skip ci]" || true
-            git push origin main || true
-          fi
-
       - name: Generate Android Platform Files
         run: |
           if [ ! -d "android" ]; then
             flutter create --platforms=android --org com.piyush.nami --project-name nami .
-          fi
-
-      - name: Configure Keystore in Android Build
-        run: |
-          mkdir -p android/app
-          cp nami-release.jks android/app/nami-release.jks
-
-          # Inject permanent signingConfig into android/app/build.gradle.kts
-          APP_GRADLE="android/app/build.gradle.kts"
-          if [ -f "$APP_GRADLE" ]; then
-            sed -i '/signingConfigs {/a \
-        create("release") {\n\
-            storeFile = file("nami-release.jks")\n\
-            storePassword = "namipass123"\n\
-            keyAlias = "nami"\n\
-            keyPassword = "namipass123"\n\
-        }' "$APP_GRADLE"
-            sed -i 's/signingConfig = signingConfigs.getByName("debug")/signingConfig = signingConfigs.getByName("release")/g' "$APP_GRADLE"
           fi
 
       - name: Inject Speed Optimizations into gradle.properties

@@ -61,7 +61,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 
   Future<void> _requestPermissionAndFetchSongs() async {
-    // Request audio permission for Android 13+ and legacy storage
     PermissionStatus status = await Permission.audio.request();
     if (!status.isGranted) {
       status = await Permission.storage.request();
@@ -73,7 +72,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         List<SongModel> songs = await _audioQuery.querySongs(
           sortType: SongSortType.TITLE,
           orderType: OrderType.ASC_OR_SMALLER,
-          uriType: UriType.EXTERNAL,
+          uriType: UriType.EXTERNAL_STORAGE,
           ignoreCase: true,
         );
         setState(() {
@@ -118,7 +117,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   @override
   Widget build(BuildContext context) {
     final List<Widget> pages = [
-      // Tracks Tab
       _hasPermission
           ? (_songs.isEmpty
               ? const Center(child: Text('No audio files found on device storage.', style: TextStyle(color: Colors.grey)))
@@ -204,7 +202,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       body: Stack(
         children: [
           pages[_selectedIndex],
-          // Namida-style Floating MiniPlayer
           Positioned(
             left: 12,
             right: 12,

@@ -155,10 +155,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         if (d.isOutput) {
           final typeName = d.type.toString().toLowerCase();
           if (typeName.contains('usb')) {
-            foundOut = "USB DAC Connected: ${d.productName} (Bit-Perfect)";
+            foundOut = "USB DAC Connected: ${d.name} (Bit-Perfect)";
             break;
           } else if (typeName.contains('wired')) {
-            foundOut = "Wired Output: ${d.productName}";
+            foundOut = "Wired Output: ${d.name}";
           }
         }
       }

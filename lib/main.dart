@@ -1082,7 +1082,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
-  // Exact Namida Track Tile with Swipe-Left to Queue as Play Next
+  // Exact Namida Track Tile with Swipe-Left to Queue as Play Next + Slightly Increased Gap between Heart and 3-Dots
   Widget _buildNamidaTrackTile(AudioTrack song, {VoidCallback? onStateUpdate}) {
     final isCurrent = _currentSong?.path == song.path;
     return Dismissible(
@@ -1188,12 +1188,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   ),
                 ],
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 14), // Namida gap between heart and 3-dots
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => _showActionMenu(song),
                 child: const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+                  padding: EdgeInsets.fromLTRB(2, 8, 8, 8), // 3-dots closer to right edge
                   child: Icon(
                     Icons.more_vert_rounded,
                     color: Colors.white70,
@@ -1740,7 +1740,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Exact Namida Artist Detail Page (SS3 & SS5: Functional Photo/Gallery Picker)
+  // Exact Namida Artist Detail Page with Persistent Bottom Navigation Bar
   void _showArtistDetailScreen(String artistName, List<AudioTrack> artistTracks) {
     final firstArt = artistTracks.firstWhere((s) => s.albumArt != null, orElse: () => artistTracks.first).albumArt;
     final Map<String, List<AudioTrack>> albumsMap = {};
@@ -1762,7 +1762,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               backgroundColor: Colors.transparent,
               actions: [
                 IconButton(icon: const Icon(Icons.search_rounded), onPressed: () {}),
-                // Fully Functional Gallery / Photo Picker Icon (SS5!)
                 IconButton(
                   icon: const Icon(Icons.photo_library_outlined),
                   onPressed: () {
@@ -1990,6 +1989,21 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 ),
               ],
             ),
+            bottomNavigationBar: NavigationBar(
+              backgroundColor: const Color(0xFF0A0A0F),
+              selectedIndex: 2, // Artists Tab Index
+              onDestinationSelected: (idx) {
+                Navigator.pop(context);
+                setState(() => _selectedIndex = idx);
+              },
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
+                NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
+                NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Artists'),
+                NavigationDestination(icon: Icon(Icons.playlist_play_rounded), selectedIcon: Icon(Icons.playlist_add_check_rounded), label: 'Playlists'),
+                NavigationDestination(icon: Icon(Icons.extension_outlined), selectedIcon: Icon(Icons.extension_rounded), label: 'Mornye'),
+              ],
+            ),
           ),
         ),
       ),
@@ -2012,22 +2026,41 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
+  // Exact Namida Album Detail Page with Persistent Bottom Navigation Bar
   void _showFilteredListScreen(String title, List<AudioTrack> tracks) {
+    final firstArt = tracks.isNotEmpty ? tracks.first.albumArt : null;
     Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => StatefulBuilder(
           builder: (context, setListState) => Scaffold(
-            appBar: AppBar(backgroundColor: Colors.transparent, title: Text(title)),
+            appBar: AppBar(
+              backgroundColor: Colors.transparent,
+              title: Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            ),
             body: Stack(
               children: [
-                ListView.builder(
-                  padding: const EdgeInsets.only(bottom: 110),
-                  itemCount: tracks.length,
-                  itemBuilder: (context, index) => _buildNamidaTrackTile(
-                    tracks[index],
-                    onStateUpdate: () => setListState(() {}),
-                  ),
+                ListView(
+                  padding: const EdgeInsets.fromLTRB(0, 10, 0, 130),
+                  children: [
+                    if (firstArt != null)
+                      Center(
+                        child: Container(
+                          width: 150,
+                          height: 150,
+                          margin: const EdgeInsets.only(bottom: 16),
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.5), blurRadius: 20)],
+                            image: DecorationImage(image: MemoryImage(firstArt), fit: BoxFit.cover),
+                          ),
+                        ),
+                      ),
+                    ...tracks.map((song) => _buildNamidaTrackTile(
+                      song,
+                      onStateUpdate: () => setListState(() {}),
+                    )),
+                  ],
                 ),
                 Positioned(
                   left: 12,
@@ -2035,6 +2068,21 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   bottom: 24,
                   child: _buildReactiveMiniPlayer(),
                 ),
+              ],
+            ),
+            bottomNavigationBar: NavigationBar(
+              backgroundColor: const Color(0xFF0A0A0F),
+              selectedIndex: 1, // Tracks Tab Index
+              onDestinationSelected: (idx) {
+                Navigator.pop(context);
+                setState(() => _selectedIndex = idx);
+              },
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
+                NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
+                NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Artists'),
+                NavigationDestination(icon: Icon(Icons.playlist_play_rounded), selectedIcon: Icon(Icons.playlist_add_check_rounded), label: 'Playlists'),
+                NavigationDestination(icon: Icon(Icons.extension_outlined), selectedIcon: Icon(Icons.extension_rounded), label: 'Mornye'),
               ],
             ),
           ),
@@ -2865,7 +2913,7 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
   }
 }
 
-// Now Playing Screen (SS1 Footer Action Buttons: Loop, Audio Path, Equalizer, Queue)
+// Now Playing Screen (SS1 Footer Layout: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right)
 class NowPlayingModal extends StatefulWidget {
   final AudioPlayer audioPlayer;
   final ValueNotifier<AudioTrack?> currentSongNotifier;
@@ -3031,7 +3079,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                     ),
                             ),
                           )
-                        // Synced Lyrics View restricted to 9 visible lines with centered active line (SS2!)
+                        // Synced Lyrics restricted to exactly 9 visible lines per SS2!
                         : StreamBuilder<Duration>(
                             stream: widget.audioPlayer.positionStream,
                             builder: (context, snapshot) {
@@ -3126,7 +3174,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                 ],
               ),
 
-              const SizedBox(height: 20),
+              const SizedBox(height: 16),
 
               StreamBuilder<Duration>(
                 stream: widget.audioPlayer.positionStream,
@@ -3157,7 +3205,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                   widget.audioPlayer.seek(Duration(milliseconds: (p * maxMs).toInt()));
                                 },
                                 child: SizedBox(
-                                  height: 48,
+                                  height: 44,
                                   width: double.infinity,
                                   child: Row(
                                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3180,7 +3228,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                             },
                           ),
 
-                          const SizedBox(height: 22),
+                          const SizedBox(height: 18),
 
                           Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -3194,10 +3242,10 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
                                   IconButton(
-                                    icon: const Icon(Icons.skip_previous_outlined, size: 32, color: Colors.white),
+                                    icon: const Icon(Icons.skip_previous_outlined, size: 30, color: Colors.white),
                                     onPressed: widget.onPrevious,
                                   ),
-                                  const SizedBox(width: 14),
+                                  const SizedBox(width: 12),
                                   StreamBuilder<bool>(
                                     stream: widget.audioPlayer.playingStream,
                                     builder: (context, snapshot) {
@@ -3205,24 +3253,24 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                       return GestureDetector(
                                         onTap: widget.onPlayPause,
                                         child: Container(
-                                          width: 66,
-                                          height: 66,
+                                          width: 62,
+                                          height: 62,
                                           decoration: BoxDecoration(
                                             color: Colors.white.withOpacity(0.08),
                                             shape: BoxShape.circle,
                                           ),
                                           child: Icon(
                                             isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                            size: 36,
+                                            size: 34,
                                             color: Colors.white,
                                           ),
                                         ),
                                       );
                                     },
                                   ),
-                                  const SizedBox(width: 14),
+                                  const SizedBox(width: 12),
                                   IconButton(
-                                    icon: const Icon(Icons.skip_next_outlined, size: 32, color: Colors.white),
+                                    icon: const Icon(Icons.skip_next_outlined, size: 30, color: Colors.white),
                                     onPressed: widget.onNext,
                                   ),
                                 ],
@@ -3240,77 +3288,125 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                 },
               ),
 
-              const SizedBox(height: 26),
+              const SizedBox(height: 20),
 
-              // Exact Namida SS1 Footer Action Buttons (Loop, Audio Path, Equalizer, Queue)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 4),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    // Button 1: Loop / Repeat Mode
-                    IconButton(
-                      icon: Icon(_isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded, size: 21, color: _isLooping ? Colors.deepPurpleAccent : Colors.white70),
-                      onPressed: () {
-                        setState(() => _isLooping = !_isLooping);
-                        widget.audioPlayer.setLoopMode(_isLooping ? LoopMode.one : LoopMode.off);
-                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_isLooping ? 'Loop Single Track Enabled' : 'Loop Disabled')));
-                      },
-                    ),
-                    // Button 2: Audio Path (Signal Chain from SS1!)
-                    IconButton(
-                      icon: const Icon(Icons.graphic_eq_rounded, size: 21, color: Colors.white70),
-                      onPressed: widget.onShowPath,
-                    ),
-                    // Button 3: Equalizer
-                    IconButton(
-                      icon: const Icon(Icons.tune_rounded, size: 21, color: Colors.white70),
-                      onPressed: () {
-                        showModalBottomSheet(
-                          context: context,
-                          backgroundColor: const Color(0xFF14141F),
-                          builder: (c) => Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('Hardware Equalizer & Sound Effects', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                const SizedBox(height: 12),
-                                const Text('Presets: Flat, Bass Boost, Hi-Fi Master, Vocal Clear', style: TextStyle(color: Colors.grey, fontSize: 13)),
-                                const SizedBox(height: 20),
-                              ],
+              // Exact Namida SS1 Footer: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Bottom Left: Audio Path / Lossless badge
+                  InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: widget.onShowPath,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 2),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: Colors.white.withOpacity(0.08),
+                              shape: BoxShape.circle,
                             ),
+                            child: const Icon(Icons.headphones_outlined, size: 16, color: Colors.white70),
                           ),
-                        );
-                      },
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              RichText(
+                                text: TextSpan(
+                                  children: [
+                                    const TextSpan(
+                                      text: 'Audio ',
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
+                                    ),
+                                    TextSpan(
+                                      text: '• $ext • $bitrate kb/s',
+                                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              const Text(
+                                '24-bit Hi-Res Lossless',
+                                style: TextStyle(fontSize: 10, color: Colors.white54),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
                     ),
-                    // Button 4: Queue / Playlist
-                    IconButton(
-                      icon: const Icon(Icons.queue_music_rounded, size: 21, color: Colors.white70),
-                      onPressed: () {
-                        showModalBottomSheet(
-                          context: context,
-                          backgroundColor: const Color(0xFF14141F),
-                          builder: (c) => Padding(
-                            padding: const EdgeInsets.all(20),
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text('Current Playback Queue', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                const SizedBox(height: 10),
-                                Text(song?.title ?? 'No active track', style: const TextStyle(color: Colors.deepPurpleAccent)),
-                              ],
+                  ),
+
+                  // Bottom Right: The 4 exact action buttons from Namida SS1
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        icon: Icon(_isLooping ? Icons.repeat_one_rounded : Icons.repeat_rounded, size: 20, color: _isLooping ? Colors.deepPurpleAccent : Colors.white70),
+                        onPressed: () {
+                          setState(() => _isLooping = !_isLooping);
+                          widget.audioPlayer.setLoopMode(_isLooping ? LoopMode.one : LoopMode.off);
+                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_isLooping ? 'Loop Single Track Enabled' : 'Loop Disabled')));
+                        },
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        icon: const Icon(Icons.graphic_eq_rounded, size: 20, color: Colors.white70),
+                        onPressed: widget.onShowPath,
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        icon: const Icon(Icons.splitscreen_rounded, size: 20, color: Colors.white70),
+                        onPressed: () {
+                          setState(() => _viewMode = _viewMode == 1 ? 0 : 1);
+                          if (_viewMode == 1) widget.onRefreshLyrics();
+                        },
+                      ),
+                      const SizedBox(width: 16),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                        icon: const Icon(Icons.queue_music_rounded, size: 20, color: Colors.white70),
+                        onPressed: () {
+                          showModalBottomSheet(
+                            context: context,
+                            backgroundColor: const Color(0xFF14141F),
+                            builder: (c) => Padding(
+                              padding: const EdgeInsets.all(20),
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text('Playback Queue & Next Up', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                                  const SizedBox(height: 10),
+                                  Text(song?.title ?? 'No active track', style: const TextStyle(color: Colors.deepPurpleAccent)),
+                                ],
+                              ),
                             ),
-                          ),
-                        );
-                      },
-                    ),
-                  ],
-                ),
+                          );
+                        },
+                      ),
+                    ],
+                  ),
+                ],
               ),
-              const SizedBox(height: 6),
+              const SizedBox(height: 4),
             ],
           ),
         );

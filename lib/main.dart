@@ -393,6 +393,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
+  // Enhanced Metadata & Artist Tag Parser (Checks ARTIST, TPE1, TPE2, ALBUMARTIST, PERFORMER)
   Future<void> _extractAudioMetadata(AudioTrack track) async {
     try {
       final file = File(track.path);
@@ -454,16 +455,27 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     final key = commentStr.substring(0, eqIdx).trim().toUpperCase();
                     final val = _sanitizeMetadataText(commentStr.substring(eqIdx + 1));
                     if (val.isNotEmpty) {
-                      if (key == 'TITLE') track.title = val;
-                      else if (key == 'ARTIST') track.artist = val;
-                      else if (key == 'ALBUM') track.album = val;
-                      else if (key == 'GENRE') track.genre = val;
-                      else if (key == 'ALBUMARTIST') track.albumArtist = val;
-                      else if (key == 'COMPOSER') track.composer = val;
-                      else if (key == 'COMMENT') track.comment = val;
-                      else if (key == 'DATE' || key == 'YEAR') track.year = val;
-                      else if (key == 'TRACKNUMBER') track.trackNumber = val;
-                      else if (key == 'LYRICS' || key == 'UNSYNCEDLYRICS') {
+                      if (key == 'TITLE') {
+                        track.title = val;
+                      } else if (key == 'ARTIST' || key == 'ALBUMARTIST' || key == 'PERFORMER') {
+                        if (track.artist == 'Unknown Artist' || track.artist.isEmpty) {
+                          track.artist = val;
+                        } else if (!track.artist.contains(val)) {
+                          track.artist = '${track.artist}, $val';
+                        }
+                      } else if (key == 'ALBUM') {
+                        track.album = val;
+                      } else if (key == 'GENRE') {
+                        track.genre = val;
+                      } else if (key == 'COMPOSER') {
+                        track.composer = val;
+                      } else if (key == 'COMMENT') {
+                        track.comment = val;
+                      } else if (key == 'DATE' || key == 'YEAR') {
+                        track.year = val;
+                      } else if (key == 'TRACKNUMBER') {
+                        track.trackNumber = val;
+                      } else if (key == 'LYRICS' || key == 'UNSYNCEDLYRICS') {
                         track.rawLyrics = commentStr.substring(eqIdx + 1).trim();
                         track.parsedLyrics = _parseLrc(track.rawLyrics);
                       }
@@ -510,9 +522,15 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           if (frameId == 'TIT2') {
             final t = _decodeId3Text(data.sublist(offset, offset + frameSize));
             if (t.isNotEmpty) track.title = t;
-          } else if (frameId == 'TPE1') {
+          } else if (frameId == 'TPE1' || frameId == 'TPE2' || frameId == 'TEXT') {
             final a = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (a.isNotEmpty) track.artist = a;
+            if (a.isNotEmpty) {
+              if (track.artist == 'Unknown Artist' || track.artist.isEmpty) {
+                track.artist = a;
+              } else if (!track.artist.contains(a)) {
+                track.artist = '${track.artist}, $a';
+              }
+            }
           } else if (frameId == 'TALB') {
             final al = _decodeId3Text(data.sublist(offset, offset + frameSize));
             if (al.isNotEmpty) track.album = al;
@@ -535,6 +553,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             track.albumArt = _extractEmbeddedImageBytes(data, offset, offset + frameSize);
           }
           offset += frameSize;
+        }
+      }
+
+      if (track.artist == 'Unknown Artist' || track.artist.isEmpty) {
+        final fileName = File(track.path).uri.pathSegments.last;
+        if (fileName.contains(' - ')) {
+          track.artist = _sanitizeMetadataText(fileName.split(' - ')[0]);
         }
       }
 
@@ -1082,7 +1107,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
-  // Exact Namida Track Tile with Swipe-Left to Queue as Play Next + Slightly Increased Gap between Heart and 3-Dots
   Widget _buildNamidaTrackTile(AudioTrack song, {VoidCallback? onStateUpdate}) {
     final isCurrent = _currentSong?.path == song.path;
     return Dismissible(
@@ -1188,12 +1212,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   ),
                 ],
               ),
-              const SizedBox(width: 14), // Namida gap between heart and 3-dots
+              const SizedBox(width: 14),
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => _showActionMenu(song),
                 child: const Padding(
-                  padding: EdgeInsets.fromLTRB(2, 8, 8, 8), // 3-dots closer to right edge
+                  padding: EdgeInsets.fromLTRB(2, 8, 8, 8),
                   child: Icon(
                     Icons.more_vert_rounded,
                     color: Colors.white70,
@@ -1660,7 +1684,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Reactive Mini-Player with Horizontal Swipe Gestures (Left/Right) for Previous/Next Track!
   Widget _buildReactiveMiniPlayer() {
     return ValueListenableBuilder<AudioTrack?>(
       valueListenable: _currentSongNotifier,
@@ -1668,9 +1691,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         return GestureDetector(
           onHorizontalDragEnd: (details) {
             if (details.primaryVelocity! < 0) {
-              _playNextTrack(); // Swipe Left -> Next Track
+              _playNextTrack();
             } else if (details.primaryVelocity! > 0) {
-              _playPrevTrack(); // Swipe Right -> Previous Track
+              _playPrevTrack();
             }
           },
           onTap: _showNowPlayingScreen,
@@ -1740,7 +1763,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Exact Namida Artist Detail Page with Persistent Bottom Navigation Bar
   void _showArtistDetailScreen(String artistName, List<AudioTrack> artistTracks) {
     final firstArt = artistTracks.firstWhere((s) => s.albumArt != null, orElse: () => artistTracks.first).albumArt;
     final Map<String, List<AudioTrack>> albumsMap = {};
@@ -1764,17 +1786,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 IconButton(icon: const Icon(Icons.search_rounded), onPressed: () {}),
                 IconButton(
                   icon: const Icon(Icons.photo_library_outlined),
-                  onPressed: () {
-                    showDialog(
-                      context: context,
-                      builder: (c) => AlertDialog(
-                        backgroundColor: const Color(0xFF14141F),
-                        title: const Text('Change Artist Banner'),
-                        content: const Text('Tap any image from your device storage to set as this artist banner.'),
-                        actions: [TextButton(onPressed: () => Navigator.pop(c), child: const Text('Close'))],
-                      ),
-                    );
-                  },
+                  onPressed: () {},
                 ),
                 IconButton(icon: const Icon(Icons.more_vert_rounded), onPressed: () {}),
               ],
@@ -1989,21 +2001,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 ),
               ],
             ),
-            bottomNavigationBar: NavigationBar(
-              backgroundColor: const Color(0xFF0A0A0F),
-              selectedIndex: 2, // Artists Tab Index
-              onDestinationSelected: (idx) {
-                Navigator.pop(context);
-                setState(() => _selectedIndex = idx);
-              },
-              destinations: const [
-                NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
-                NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
-                NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Artists'),
-                NavigationDestination(icon: Icon(Icons.playlist_play_rounded), selectedIcon: Icon(Icons.playlist_add_check_rounded), label: 'Playlists'),
-                NavigationDestination(icon: Icon(Icons.extension_outlined), selectedIcon: Icon(Icons.extension_rounded), label: 'Mornye'),
-              ],
-            ),
           ),
         ),
       ),
@@ -2026,7 +2023,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Exact Namida Album Detail Page with Persistent Bottom Navigation Bar
   void _showFilteredListScreen(String title, List<AudioTrack> tracks) {
     final firstArt = tracks.isNotEmpty ? tracks.first.albumArt : null;
     Navigator.push(
@@ -2068,21 +2064,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   bottom: 24,
                   child: _buildReactiveMiniPlayer(),
                 ),
-              ],
-            ),
-            bottomNavigationBar: NavigationBar(
-              backgroundColor: const Color(0xFF0A0A0F),
-              selectedIndex: 1, // Tracks Tab Index
-              onDestinationSelected: (idx) {
-                Navigator.pop(context);
-                setState(() => _selectedIndex = idx);
-              },
-              destinations: const [
-                NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home_rounded), label: 'Home'),
-                NavigationDestination(icon: Icon(Icons.library_music_outlined), selectedIcon: Icon(Icons.library_music_rounded), label: 'Tracks'),
-                NavigationDestination(icon: Icon(Icons.person_outline_rounded), selectedIcon: Icon(Icons.person_rounded), label: 'Artists'),
-                NavigationDestination(icon: Icon(Icons.playlist_play_rounded), selectedIcon: Icon(Icons.playlist_add_check_rounded), label: 'Playlists'),
-                NavigationDestination(icon: Icon(Icons.extension_outlined), selectedIcon: Icon(Icons.extension_rounded), label: 'Mornye'),
               ],
             ),
           ),
@@ -3290,7 +3271,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
               const SizedBox(height: 20),
 
-              // Exact Namida SS1 Footer: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right
+              // Exact Namida SS1 Footer Layout: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,

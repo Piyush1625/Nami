@@ -85,7 +85,7 @@ class AudioTrack {
     this.isLyricsFetched = false,
     this.duration = const Duration(minutes: 3, seconds: 45),
     this.isFavorite = false,
-    this.addedDate = "Aug 2025",
+    this.addedDate = "Sep 2026",
     this.fileSize = 0,
     this.bitrateKbps = 1790,
     this.sampleRateHz = 48000,
@@ -393,7 +393,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
-  // Enhanced Metadata & Artist Tag Parser (Checks ARTIST, TPE1, TPE2, ALBUMARTIST, PERFORMER)
   Future<void> _extractAudioMetadata(AudioTrack track) async {
     try {
       final file = File(track.path);
@@ -1107,6 +1106,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
+  // Exact Namida Track Tile with Swipe-Left to Queue as Play Next + Clean Action Button Spacing (SS1 & SS3!)
   Widget _buildNamidaTrackTile(AudioTrack song, {VoidCallback? onStateUpdate}) {
     final isCurrent = _currentSong?.path == song.path;
     return Dismissible(
@@ -1212,12 +1212,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   ),
                 ],
               ),
-              const SizedBox(width: 14),
+              const SizedBox(width: 16), // Balanced gap between heart and 3-dots (SS3!)
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onTap: () => _showActionMenu(song),
                 child: const Padding(
-                  padding: EdgeInsets.fromLTRB(2, 8, 8, 8),
+                  padding: EdgeInsets.fromLTRB(2, 8, 10, 8), // 3-dots close to right edge (SS3!)
                   child: Icon(
                     Icons.more_vert_rounded,
                     color: Colors.white70,
@@ -2095,6 +2095,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       builder: (context) => NowPlayingModal(
         audioPlayer: _audioPlayer,
         currentSongNotifier: _currentSongNotifier,
+        playNextQueue: _playNextQueue,
         totalTrackCount: _songs.length,
         currentIndex: _currentSong != null ? (_songs.indexOf(_currentSong!) + 1) : 1,
         extensions: _extensions,
@@ -2469,7 +2470,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 3. Playlists Page
+      // 3. Playlists Page (Fixed Live Stats Cards per SS5!)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -2894,10 +2895,11 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
   }
 }
 
-// Now Playing Screen (SS1 Footer Layout: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right)
+// Now Playing Screen (SS2: Synced Lyrics restricted to 9 lines, active timestamp centered on 5th line!)
 class NowPlayingModal extends StatefulWidget {
   final AudioPlayer audioPlayer;
   final ValueNotifier<AudioTrack?> currentSongNotifier;
+  final List<AudioTrack> playNextQueue;
   final int totalTrackCount;
   final int currentIndex;
   final List<MornyeExtension> extensions;
@@ -2912,6 +2914,7 @@ class NowPlayingModal extends StatefulWidget {
     super.key,
     required this.audioPlayer,
     required this.currentSongNotifier,
+    required this.playNextQueue,
     required this.totalTrackCount,
     required this.currentIndex,
     required this.extensions,
@@ -2928,7 +2931,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Artwork, 1 = Synced Lyrics (Restricted to 9 visible lines per SS2!)
+  int _viewMode = 0; // 0 = Artwork, 1 = Synced Lyrics
   bool _isLooping = false;
   final ScrollController _lyricsScrollCtrl = ScrollController();
   int _lastScrolledLyricIndex = -1;
@@ -2948,7 +2951,8 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
     if (activeIdx == _lastScrolledLyricIndex) return;
     _lastScrolledLyricIndex = activeIdx;
     if (_lyricsScrollCtrl.hasClients) {
-      final targetOffset = (activeIdx * 48.0 - 90.0).clamp(0.0, _lyricsScrollCtrl.position.maxScrollExtent);
+      // Centers the active lyric on the 5th line of the 9-line visible viewport (SS2!)
+      final targetOffset = (activeIdx * 48.0 - 160.0).clamp(0.0, _lyricsScrollCtrl.position.maxScrollExtent);
       _lyricsScrollCtrl.animateTo(
         targetOffset,
         duration: const Duration(milliseconds: 300),
@@ -3060,7 +3064,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                     ),
                             ),
                           )
-                        // Synced Lyrics restricted to exactly 9 visible lines per SS2!
+                        // Synced Lyrics View strictly bounded to 9 lines with active line on 5th line (SS2!)
                         : StreamBuilder<Duration>(
                             stream: widget.audioPlayer.positionStream,
                             builder: (context, snapshot) {
@@ -3080,20 +3084,21 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                 height: 360,
                                 child: ListView.builder(
                                   controller: _lyricsScrollCtrl,
+                                  padding: const EdgeInsets.symmetric(vertical: 160), // Generous top/bottom padding so active line centers on 5th line
                                   itemCount: lyrics.length,
                                   itemBuilder: (context, idx) {
                                     final isCurrent = idx == activeIdx;
                                     return GestureDetector(
                                       onTap: () => widget.audioPlayer.seek(lyrics[idx].timestamp),
                                       child: Container(
-                                        height: 40,
+                                        height: 48,
                                         alignment: Alignment.center,
                                         child: Text(
                                           lyrics[idx].text,
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
-                                            fontSize: isCurrent ? 17 : 14.5,
+                                            fontSize: isCurrent ? 17.5 : 14.5,
                                             fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w500,
                                             color: isCurrent ? Colors.white : Colors.white30,
                                           ),
@@ -3271,12 +3276,11 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
               const SizedBox(height: 20),
 
-              // Exact Namida SS1 Footer Layout: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right
+              // Footer: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right (SS2 Fully Populated Playback Queue!)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  // Bottom Left: Audio Path / Lossless badge
                   InkWell(
                     borderRadius: BorderRadius.circular(12),
                     onTap: widget.onShowPath,
@@ -3324,7 +3328,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                     ),
                   ),
 
-                  // Bottom Right: The 4 exact action buttons from Namida SS1
                   Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
@@ -3359,6 +3362,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                         },
                       ),
                       const SizedBox(width: 16),
+                      // Fully Populated Playback Queue Sheet (SS2!)
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
@@ -3368,6 +3372,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           showModalBottomSheet(
                             context: context,
                             backgroundColor: const Color(0xFF14141F),
+                            shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
                             builder: (c) => Padding(
                               padding: const EdgeInsets.all(20),
                               child: Column(
@@ -3375,8 +3380,32 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
                                   const Text('Playback Queue & Next Up', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                                  const SizedBox(height: 10),
-                                  Text(song?.title ?? 'No active track', style: const TextStyle(color: Colors.deepPurpleAccent)),
+                                  const SizedBox(height: 12),
+                                  if (widget.playNextQueue.isEmpty)
+                                    const Text('No tracks in play-next queue. Swipe left on any track to add it here!', style: TextStyle(color: Colors.grey, fontSize: 12))
+                                  else
+                                    SizedBox(
+                                      height: 220,
+                                      child: ListView.builder(
+                                        itemCount: widget.playNextQueue.length,
+                                        itemBuilder: (ctx, i) {
+                                          final qTrack = widget.playNextQueue[i];
+                                          return ListTile(
+                                            contentPadding: EdgeInsets.zero,
+                                            leading: ClipRRect(borderRadius: BorderRadius.circular(6), child: qTrack.albumArt != null ? Image.memory(qTrack.albumArt!, width: 40, height: 40, fit: BoxFit.cover) : const Icon(Icons.album, color: Colors.deepPurpleAccent)),
+                                            title: Text(qTrack.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                                            subtitle: Text(qTrack.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                                            trailing: IconButton(
+                                              icon: const Icon(Icons.close, size: 16, color: Colors.grey),
+                                              onPressed: () {
+                                                setState(() => widget.playNextQueue.removeAt(i));
+                                                Navigator.pop(c);
+                                              },
+                                            ),
+                                          );
+                                        },
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),

@@ -403,6 +403,332 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
+  Future<void> _toggleUsbDacMode(bool enabled) async {
+    setState(() => _usbDacExclusive = enabled);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(enabled ? 'USB DAC Bit-Perfect Mode Enabled (Direct Hardware Routing)' : 'Android System Mixer Active'),
+          backgroundColor: Colors.deepPurple,
+        ),
+      );
+    }
+  }
+
+  void _filterSongs(String query) {
+    final q = query.toLowerCase();
+    setState(() {
+      _filteredSongs = _songs.where((song) =>
+        song.title.toLowerCase().contains(q) ||
+        song.artist.toLowerCase().contains(q) ||
+        song.album.toLowerCase().contains(q)
+      ).toList();
+    });
+  }
+
+  Future<void> _playSong(AudioTrack song) async {
+    if (song.path.isEmpty) return;
+    _currentSong = song;
+    if (!_historyTracks.contains(song)) {
+      _historyTracks.insert(0, song);
+    }
+    if (mounted) setState(() {});
+    _fetchLyricsOnline(song);
+    try {
+      await _audioPlayer.stop();
+      await _audioPlayer.setFilePath(song.path);
+      await _audioPlayer.play();
+      if (_audioPlayer.duration != null && _audioPlayer.duration!.inSeconds > 0) {
+        song.duration = _audioPlayer.duration!;
+        if (song.fileSize > 0) {
+          song.bitrateKbps = ((song.fileSize * 8) ~/ 1000) ~/ song.duration.inSeconds;
+        }
+        if (mounted) setState(() {});
+      }
+    } catch (_) {}
+  }
+
+  void _playNextTrack() {
+    if (_playNextQueue.isNotEmpty) {
+      final next = _playNextQueue.removeAt(0);
+      _playSong(next);
+      return;
+    }
+    if (_filteredSongs.isNotEmpty && _currentSong != null) {
+      int nextIdx = (_filteredSongs.indexOf(_currentSong!) + 1) % _filteredSongs.length;
+      _playSong(_filteredSongs[nextIdx]);
+    } else if (_filteredSongs.isNotEmpty) {
+      _playSong(_filteredSongs.first);
+    }
+  }
+
+  void _playPrevTrack() {
+    if (_filteredSongs.isNotEmpty && _currentSong != null) {
+      int prevIdx = (_filteredSongs.indexOf(_currentSong!) - 1 + _filteredSongs.length) % _filteredSongs.length;
+      _playSong(_filteredSongs[prevIdx]);
+    }
+  }
+
+  void _shufflePlay() {
+    if (_songs.isNotEmpty) {
+      List<AudioTrack> shuffled = List.from(_songs)..shuffle();
+      _playSong(shuffled.first);
+    }
+  }
+
+  void _togglePlayPause() async {
+    if (_audioPlayer.playing) {
+      await _audioPlayer.pause();
+    } else {
+      if (_currentSong == null && _filteredSongs.isNotEmpty) {
+        _playSong(_filteredSongs.first);
+      } else {
+        await _audioPlayer.play();
+      }
+    }
+  }
+
+  void _startSleepTimer(int minutes, {bool stopAfterTrack = false}) {
+    _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _audioPlayer.setVolume(1.0);
+
+    setState(() {
+      _sleepAfterCurrentTrack = stopAfterTrack;
+      _sleepMinutesRemaining = minutes;
+    });
+
+    if (stopAfterTrack) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Playback will stop after current track')));
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sleep Timer set for $minutes minutes')));
+
+    _sleepTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (_sleepMinutesRemaining <= 1) {
+        timer.cancel();
+        _beginSmoothFadeOut();
+      } else {
+        setState(() => _sleepMinutesRemaining--);
+      }
+    });
+  }
+
+  void _beginSmoothFadeOut() {
+    int fadeSteps = 30;
+    int currentStep = 0;
+    _fadeTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      currentStep++;
+      double volume = (1.0 - (currentStep / fadeSteps)).clamp(0.0, 1.0);
+      _audioPlayer.setVolume(volume);
+      if (currentStep >= fadeSteps) {
+        t.cancel();
+        _audioPlayer.pause();
+        _audioPlayer.setVolume(1.0);
+        setState(() => _sleepMinutesRemaining = 0);
+      }
+    });
+  }
+
+  void _cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _audioPlayer.setVolume(1.0);
+    setState(() {
+      _sleepMinutesRemaining = 0;
+      _sleepAfterCurrentTrack = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sleep Timer cancelled')));
+  }
+
+  void _showSleepTimerDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14141F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.bedtime_rounded, color: Colors.deepPurpleAccent),
+                  SizedBox(width: 10),
+                  Text('Sleep Timer', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [15, 30, 45, 60, 90].map((mins) => ActionChip(
+                  label: Text('$mins min'),
+                  backgroundColor: const Color(0xFF0A0A0E),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _startSleepTimer(mins);
+                  },
+                )).toList(),
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.music_off_rounded, color: Colors.white70),
+                title: const Text('End of current track'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startSleepTimer(0, stopAfterTrack: true);
+                },
+              ),
+              if (_sleepMinutesRemaining > 0 || _sleepAfterCurrentTrack)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.cancel_rounded, color: Colors.redAccent),
+                  title: const Text('Turn Off Sleep Timer', style: TextStyle(color: Colors.redAccent)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _cancelSleepTimer();
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showMornyePreferencesSheet() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF12121A),
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(26))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setPrefState) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.tune_rounded, color: Colors.deepPurpleAccent),
+                    SizedBox(width: 10),
+                    Text('Mornye Preferences', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                const Text('Preferred Audio Quality', style: TextStyle(fontSize: 12, color: Colors.grey)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [
+                    '24-bit / 192kHz Hi-Res FLAC',
+                    '16-bit / 44.1kHz Lossless',
+                    '320kbps AAC Master',
+                  ].map((q) {
+                    final sel = _mornyeAudioQuality == q;
+                    return ChoiceChip(
+                      label: Text(q, style: TextStyle(fontSize: 11, color: sel ? Colors.white : Colors.white70)),
+                      selected: sel,
+                      selectedColor: Colors.deepPurpleAccent,
+                      backgroundColor: const Color(0xFF1A1A24),
+                      onSelected: (_) {
+                        setPrefState(() => _mornyeAudioQuality = q);
+                        setState(() {});
+                      },
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 12),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Embed High-Res Cover Art', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text('Attach 600x600 studio album cover to downloads', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                  value: _mornyeEmbedArt,
+                  activeColor: Colors.deepPurpleAccent,
+                  onChanged: (v) {
+                    setPrefState(() => _mornyeEmbedArt = v);
+                    setState(() {});
+                  },
+                ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Auto-Fetch Synced .LRC Lyrics', style: TextStyle(fontSize: 14)),
+                  subtitle: const Text('Download timestamped lyrics on save', style: TextStyle(fontSize: 11, color: Colors.grey)),
+                  value: _mornyeAutoLrc,
+                  activeColor: Colors.deepPurpleAccent,
+                  onChanged: (v) {
+                    setPrefState(() => _mornyeAutoLrc = v);
+                    setState(() {});
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showExtensionRepoDialog() {
+    final urlCtrl = TextEditingController(text: _mornyeRepoUrl);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF14141F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: const Text('Extension Repository', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Current repository:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 4),
+            Text(_mornyeRepoUrl, style: const TextStyle(fontSize: 11, color: Colors.deepPurpleAccent)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(
+                hintText: 'Enter registry JSON URL...',
+                filled: true,
+                fillColor: Color(0xFF0A0A0E),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            onPressed: () {
+              setState(() => _mornyeRepoUrl = "");
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Extension repository removed.')));
+            },
+            child: const Text('Remove'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
+            onPressed: () {
+              if (urlCtrl.text.trim().isNotEmpty) {
+                setState(() => _mornyeRepoUrl = urlCtrl.text.trim());
+              }
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repository saved successfully!')));
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _requestPermissionsAndInitBackground() async {
     PermissionStatus status = await Permission.audio.request();
     await Permission.photos.request();
@@ -1456,8 +1782,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       totalSeconds += s.duration.inSeconds;
     }
     final totalMin = (totalSeconds ~/ 60).clamp(1, 999);
-    bool showAlbumsExpanded = false;
-    bool showSinglesExpanded = false;
     final TextEditingController artistSearchCtrl = TextEditingController();
     List<AudioTrack> visibleArtistTracks = List.from(artistTracks);
 

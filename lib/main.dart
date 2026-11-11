@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:convert';
@@ -146,6 +147,7 @@ class MornyeCatalogItem {
   final String? previewUrl;
   final String? artworkUrl;
   final int durationSeconds;
+  final String? collectionId;
 
   MornyeCatalogItem({
     required this.title,
@@ -157,6 +159,7 @@ class MornyeCatalogItem {
     this.previewUrl,
     this.artworkUrl,
     this.durationSeconds = 210,
+    this.collectionId,
   });
 }
 
@@ -196,6 +199,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   int _artistGridColumns = 4;
   String _artistSortOrder = "Artist";
 
+  // Folder View State
+  bool _isFolderView = false;
+  Directory _currentFolder = Directory('/storage/emulated/0/Music');
+
+  // Sleep Timer State
+  Timer? _sleepTimer;
+  Timer? _fadeTimer;
+  int _sleepMinutesRemaining = 0;
+  bool _sleepAfterCurrentTrack = false;
+
+  // Settings State
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
   bool _mediaNotificationEnabled = true;
@@ -258,6 +272,16 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     _audioPlayer.playerStateStream.listen((state) {
       if (mounted) setState(() => _isPlaying = state.playing);
       if (state.processingState == ProcessingState.completed) {
+        if (_sleepAfterCurrentTrack) {
+          _audioPlayer.pause();
+          setState(() {
+            _sleepAfterCurrentTrack = false;
+            _sleepMinutesRemaining = 0;
+          });
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Playback paused by Sleep Timer.')));
+          return;
+        }
+
         if (_playNextQueue.isNotEmpty) {
           final next = _playNextQueue.removeAt(0);
           _playSong(next);
@@ -306,6 +330,119 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ),
       );
     }
+  }
+
+  void _startSleepTimer(int minutes, {bool stopAfterTrack = false}) {
+    _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _audioPlayer.setVolume(1.0);
+
+    setState(() {
+      _sleepAfterCurrentTrack = stopAfterTrack;
+      _sleepMinutesRemaining = minutes;
+    });
+
+    if (stopAfterTrack) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Playback will stop after current track')));
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Sleep Timer set for $minutes minutes')));
+
+    _sleepTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
+      if (_sleepMinutesRemaining <= 1) {
+        timer.cancel();
+        _beginSmoothFadeOut();
+      } else {
+        setState(() => _sleepMinutesRemaining--);
+      }
+    });
+  }
+
+  void _beginSmoothFadeOut() {
+    int fadeSteps = 30;
+    int currentStep = 0;
+    _fadeTimer = Timer.periodic(const Duration(seconds: 1), (t) {
+      currentStep++;
+      double volume = (1.0 - (currentStep / fadeSteps)).clamp(0.0, 1.0);
+      _audioPlayer.setVolume(volume);
+      if (currentStep >= fadeSteps) {
+        t.cancel();
+        _audioPlayer.pause();
+        _audioPlayer.setVolume(1.0);
+        setState(() => _sleepMinutesRemaining = 0);
+      }
+    });
+  }
+
+  void _cancelSleepTimer() {
+    _sleepTimer?.cancel();
+    _fadeTimer?.cancel();
+    _audioPlayer.setVolume(1.0);
+    setState(() {
+      _sleepMinutesRemaining = 0;
+      _sleepAfterCurrentTrack = false;
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Sleep Timer cancelled')));
+  }
+
+  void _showSleepTimerDialog() {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14141F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.bedtime_rounded, color: Colors.deepPurpleAccent),
+                  SizedBox(width: 10),
+                  Text('Sleep Timer', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: [15, 30, 45, 60, 90].map((mins) => ActionChip(
+                  label: Text('$mins min'),
+                  backgroundColor: const Color(0xFF0A0A0E),
+                  onPressed: () {
+                    Navigator.pop(context);
+                    _startSleepTimer(mins);
+                  },
+                )).toList(),
+              ),
+              const SizedBox(height: 10),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.music_off_rounded, color: Colors.white70),
+                title: const Text('End of current track'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _startSleepTimer(0, stopAfterTrack: true);
+                },
+              ),
+              if (_sleepMinutesRemaining > 0 || _sleepAfterCurrentTrack)
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.cancel_rounded, color: Colors.redAccent),
+                  title: const Text('Turn Off Sleep Timer', style: TextStyle(color: Colors.redAccent)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _cancelSleepTimer();
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   Future<void> _requestPermissionAndScanMusic() async {
@@ -401,9 +538,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           }
         }
       }
-    } catch (e) {
-      debugPrint('Error scanning music: $e');
-    }
+    } catch (_) {}
 
     foundTracks.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
@@ -765,6 +900,104 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (mounted) setState(() {});
   }
 
+  void _showManualLyricsSearchDialog(AudioTrack song) {
+    final searchCtrl = TextEditingController(text: '${song.title} ${song.artist}');
+    List<dynamic> manualResults = [];
+    bool isSearching = false;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF14141F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) => Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(context).viewInsets.bottom + 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.search_rounded, color: Colors.deepPurpleAccent),
+                  SizedBox(width: 8),
+                  Text('Search Lyrics (LRCLIB)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: searchCtrl,
+                decoration: InputDecoration(
+                  hintText: 'Track Title & Artist...',
+                  filled: true,
+                  fillColor: const Color(0xFF0A0A0E),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.arrow_forward_rounded, color: Colors.deepPurpleAccent),
+                    onPressed: () async {
+                      setModalState(() => isSearching = true);
+                      try {
+                        final res = await http.get(
+                          Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent(searchCtrl.text.trim())}'),
+                          headers: {'User-Agent': 'NamiMusicPlayer/1.0'},
+                        ).timeout(const Duration(seconds: 7));
+                        if (res.statusCode == 200) {
+                          final data = jsonDecode(res.body);
+                          if (data is List) {
+                            setModalState(() {
+                              manualResults = data;
+                              isSearching = false;
+                            });
+                          }
+                        }
+                      } catch (_) {
+                        setModalState(() => isSearching = false);
+                      }
+                    },
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (isSearching)
+                const Padding(padding: EdgeInsets.all(20), child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
+              else if (manualResults.isNotEmpty)
+                SizedBox(
+                  height: 250,
+                  child: ListView.builder(
+                    itemCount: manualResults.length,
+                    itemBuilder: (ctx, i) {
+                      final item = manualResults[i];
+                      final t = item['trackName'] ?? 'Unknown';
+                      final a = item['artistName'] ?? 'Unknown';
+                      final hasSynced = item['syncedLyrics'] != null && item['syncedLyrics'].toString().isNotEmpty;
+                      return ListTile(
+                        leading: Icon(hasSynced ? Icons.lyrics_rounded : Icons.text_snippet_outlined, color: hasSynced ? Colors.deepPurpleAccent : Colors.grey),
+                        title: Text(t, maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text('$a • ${hasSynced ? 'Synced LRC' : 'Plain Text'}'),
+                        onTap: () async {
+                          final lrc = (item['syncedLyrics'] ?? item['plainLyrics'] ?? '').toString();
+                          if (lrc.isNotEmpty) {
+                            song.rawLyrics = lrc;
+                            song.parsedLyrics = _parseLrc(lrc);
+                            song.isLyricsFetched = true;
+                            try {
+                              final lrcPath = '${song.path.substring(0, song.path.lastIndexOf('.'))}.lrc';
+                              await File(lrcPath).writeAsString(lrc);
+                            } catch (_) {}
+                            if (mounted) setState(() {});
+                            Navigator.pop(context);
+                            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Lyrics linked and saved to .lrc!')));
+                          }
+                        },
+                      );
+                    },
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Future<void> _searchMornyeCatalog(String query) async {
     if (query.trim().isEmpty) {
       setState(() => _mornyeResults = []);
@@ -789,6 +1022,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             final preview = item['previewUrl']?.toString();
             final art = item['artworkUrl100']?.toString().replaceAll('100x100bb', '600x600bb');
             final timeMs = int.tryParse(item['trackTimeMillis']?.toString() ?? '210000') ?? 210000;
+            final collectionId = item['collectionId']?.toString();
 
             items.add(MornyeCatalogItem(
               title: track,
@@ -800,6 +1034,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               previewUrl: preview,
               artworkUrl: art,
               durationSeconds: timeMs ~/ 1000,
+              collectionId: collectionId,
             ));
 
             if (!seenArtists.contains(artist)) {
@@ -821,10 +1056,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 title: album,
                 artist: artist,
                 album: album,
-                subtitle: '$artist • via $_selectedMornyeService',
+                subtitle: '$artist • Album via $_selectedMornyeService',
                 type: 'album',
                 service: _selectedMornyeService,
                 artworkUrl: art,
+                collectionId: collectionId,
               ));
             }
           }
@@ -920,6 +1156,48 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     }
   }
 
+  Future<void> _batchDownloadAlbum(MornyeCatalogItem albumItem) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Fetching all tracks for "${albumItem.title}"...'), backgroundColor: Colors.deepPurple),
+    );
+    try {
+      final uri = Uri.parse(
+        albumItem.collectionId != null
+            ? 'https://itunes.apple.com/lookup?id=${albumItem.collectionId}&entity=song'
+            : 'https://itunes.apple.com/search?term=${Uri.encodeComponent("${albumItem.title} ${albumItem.artist}")}&media=music&limit=20',
+      );
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (res.statusCode == 200) {
+        final decoded = jsonDecode(res.body);
+        final list = (decoded['results'] as List?)?.where((i) => i['wrapperType'] == 'track' || i['kind'] == 'song').toList() ?? [];
+        if (list.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No individual tracks found for this release.')));
+          return;
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Starting batch download for ${list.length} tracks!'), backgroundColor: Colors.deepPurple),
+        );
+
+        for (var t in list) {
+          final item = MornyeCatalogItem(
+            title: t['trackName'] ?? 'Track',
+            artist: t['artistName'] ?? albumItem.artist,
+            album: albumItem.title,
+            subtitle: '${albumItem.artist} • ${albumItem.title}',
+            type: 'song',
+            service: albumItem.service,
+            previewUrl: t['previewUrl'],
+            artworkUrl: albumItem.artworkUrl,
+          );
+          await _downloadMornyeTrack(item);
+        }
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Batch download error: $e')));
+    }
+  }
+
   void _showExtensionRepoDialog() {
     final urlCtrl = TextEditingController(text: _mornyeRepoUrl);
     showDialog(
@@ -956,10 +1234,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             },
             child: const Text('Remove'),
           ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
             style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
             onPressed: () {
@@ -1096,9 +1371,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
         if (mounted) setState(() {});
       }
-    } catch (e) {
-      debugPrint('Error playing track: $e');
-    }
+    } catch (_) {}
   }
 
   void _playNextTrack() {
@@ -1201,21 +1474,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                       song.artist,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w500,
-                        color: Colors.white70,
-                      ),
+                      style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w500, color: Colors.white70),
                     ),
                     const SizedBox(height: 1),
                     Text(
                       '${song.album} • ${song.addedDate}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: Colors.white54,
-                      ),
+                      style: const TextStyle(fontSize: 11, color: Colors.white54),
                     ),
                   ],
                 ),
@@ -1227,11 +1493,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 children: [
                   Text(
                     _formatDurationPadded(song.duration),
-                    style: const TextStyle(
-                      fontSize: 11,
-                      color: Colors.white70,
-                      fontWeight: FontWeight.w500,
-                    ),
+                    style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w500),
                   ),
                   const SizedBox(height: 4),
                   GestureDetector(
@@ -1253,11 +1515,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 onTap: () => _showActionMenu(song),
                 child: const Padding(
                   padding: EdgeInsets.fromLTRB(2, 8, 10, 8),
-                  child: Icon(
-                    Icons.more_vert_rounded,
-                    color: Colors.white70,
-                    size: 19,
-                  ),
+                  child: Icon(Icons.more_vert_rounded, color: Colors.white70, size: 19),
                 ),
               ),
             ],
@@ -1291,10 +1549,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         ? FileImage(File(pathCtrl.text))
                         : null,
                     child: (pathCtrl.text.isEmpty || !File(pathCtrl.text).existsSync())
-                        ? Text(
-                            nameCtrl.text.isNotEmpty ? nameCtrl.text[0].toUpperCase() : 'P',
-                            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold),
-                          )
+                        ? Text(nameCtrl.text.isNotEmpty ? nameCtrl.text[0].toUpperCase() : 'P', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold))
                         : null,
                   ),
                 ),
@@ -1302,19 +1557,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 TextField(
                   controller: nameCtrl,
                   onChanged: (_) => setModalState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Your Name',
-                    hintText: 'Enter your name...',
-                  ),
+                  decoration: const InputDecoration(labelText: 'Your Name', hintText: 'Enter your name...'),
                 ),
                 const SizedBox(height: 12),
                 TextField(
                   controller: pathCtrl,
                   onChanged: (_) => setModalState(() {}),
-                  decoration: const InputDecoration(
-                    labelText: 'Custom Image Path',
-                    hintText: '/storage/emulated/0/Download/photo.jpg',
-                  ),
+                  decoration: const InputDecoration(labelText: 'Custom Image Path', hintText: '/storage/emulated/0/Download/photo.jpg'),
                 ),
                 if (_deviceImages.isNotEmpty) ...[
                   const SizedBox(height: 14),
@@ -1338,14 +1587,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                             height: 60,
                             decoration: BoxDecoration(
                               borderRadius: BorderRadius.circular(10),
-                              border: Border.all(
-                                color: pathCtrl.text == imgPath ? Colors.deepPurpleAccent : Colors.white24,
-                                width: 2,
-                              ),
-                              image: DecorationImage(
-                                image: FileImage(File(imgPath)),
-                                fit: BoxFit.cover,
-                              ),
+                              border: Border.all(color: pathCtrl.text == imgPath ? Colors.deepPurpleAccent : Colors.white24, width: 2),
+                              image: DecorationImage(image: FileImage(File(imgPath)), fit: BoxFit.cover),
                             ),
                           ),
                         );
@@ -1390,16 +1633,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Center(
-                child: Container(
-                  width: 38,
-                  height: 4,
-                  decoration: BoxDecoration(
-                    color: Colors.white38,
-                    borderRadius: BorderRadius.circular(2),
-                  ),
-                ),
-              ),
+              Center(child: Container(width: 38, height: 4, decoration: BoxDecoration(color: Colors.white38, borderRadius: BorderRadius.circular(2)))),
               const SizedBox(height: 18),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -1447,11 +1681,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             Container(
               width: 38,
               height: 38,
-              decoration: BoxDecoration(
-                color: fillBg,
-                shape: BoxShape.circle,
-                border: Border.all(color: ringBorder, width: 1.3),
-              ),
+              decoration: BoxDecoration(color: fillBg, shape: BoxShape.circle, border: Border.all(color: ringBorder, width: 1.3)),
               child: Icon(useCustomWaveIcon ? Icons.waves_rounded : icon, size: 18, color: iconColor),
             ),
             const SizedBox(width: 16),
@@ -1580,14 +1810,21 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Row(
+              Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Edit Tags', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                  Icon(Icons.edit_note_rounded, color: Colors.deepPurpleAccent),
+                  const Text('Edit Tags', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                  TextButton.icon(
+                    icon: const Icon(Icons.cloud_download_rounded, size: 16, color: Colors.deepPurpleAccent),
+                    label: const Text('Search Lyrics', style: TextStyle(fontSize: 12, color: Colors.deepPurpleAccent)),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _showManualLyricsSearchDialog(song);
+                    },
+                  ),
                 ],
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 14),
               Row(
                 children: [
                   Expanded(child: TextField(controller: trackNumCtrl, decoration: const InputDecoration(labelText: 'Track Number'))),
@@ -1731,6 +1968,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               Navigator.pop(context);
               _showTagEditorDialog(song);
             }),
+            _buildMenuTile(Icons.search_rounded, 'Search Synced Lyrics Online', 'Pick from LRCLIB database', () {
+              Navigator.pop(context);
+              _showManualLyricsSearchDialog(song);
+            }),
             _buildMenuTile(Icons.warning_amber_rounded, 'Advanced', 'Delete file forever', () {
               Navigator.pop(context);
               _showAdvancedDeleteDialog(song);
@@ -1741,9 +1982,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               title: const Text('Play Next'),
               onTap: () {
                 Navigator.pop(context);
-                setState(() {
-                  _playNextQueue.add(song);
-                });
+                setState(() => _playNextQueue.add(song));
                 ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Added ${song.title} to play next')));
               },
             ),
@@ -1808,18 +2047,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     return Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        IconButton(
-                          icon: const Icon(Icons.skip_previous_rounded, size: 24),
-                          onPressed: _playPrevTrack,
-                        ),
-                        IconButton(
-                          icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 28),
-                          onPressed: _togglePlayPause,
-                        ),
-                        IconButton(
-                          icon: const Icon(Icons.skip_next_rounded, size: 24),
-                          onPressed: _playNextTrack,
-                        ),
+                        IconButton(icon: const Icon(Icons.skip_previous_rounded, size: 24), onPressed: _playPrevTrack),
+                        IconButton(icon: Icon(playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 28), onPressed: _togglePlayPause),
+                        IconButton(icon: const Icon(Icons.skip_next_rounded, size: 24), onPressed: _playNextTrack),
                       ],
                     );
                   },
@@ -2353,10 +2583,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         totalTrackCount: _songs.length,
         currentIndex: _currentSong != null ? (_songs.indexOf(_currentSong!) + 1) : 1,
         extensions: _extensions,
+        sleepMinutesRemaining: _sleepMinutesRemaining,
+        sleepAfterTrack: _sleepAfterCurrentTrack,
         onShowPath: () {
           if (_currentSong != null) _showAudioPathDetails(_currentSong!);
         },
         onShowEqualizer: _showEqualizerSheet,
+        onShowSleepTimer: _showSleepTimerDialog,
         onToggleFavorite: () {
           if (_currentSong != null) {
             setState(() => _currentSong!.isFavorite = !_currentSong!.isFavorite);
@@ -2370,6 +2603,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         },
         onEditTags: () {
           if (_currentSong != null) _showTagEditorDialog(_currentSong!);
+        },
+        onManualSearchLyrics: () {
+          if (_currentSong != null) _showManualLyricsSearchDialog(_currentSong!);
         },
         onPlayPause: _togglePlayPause,
         onNext: _playNextTrack,
@@ -2452,6 +2688,83 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
+  // Folder Explorer Widget
+  Widget _buildFolderExplorer() {
+    List<FileSystemEntity> entities = [];
+    try {
+      if (_currentFolder.existsSync()) {
+        entities = _currentFolder.listSync().where((e) {
+          final n = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+          if (n.startsWith('.')) return false;
+          if (e is Directory) return true;
+          final l = e.path.toLowerCase();
+          return l.endsWith('.flac') || l.endsWith('.mp3') || l.endsWith('.m4a') || l.endsWith('.wav');
+        }).toList();
+        entities.sort((a, b) {
+          if (a is Directory && b is! Directory) return -1;
+          if (a is! Directory && b is Directory) return 1;
+          return a.path.toLowerCase().compareTo(b.path.toLowerCase());
+        });
+      }
+    } catch (_) {}
+
+    final canGoUp = _currentFolder.path != '/storage/emulated/0' && _currentFolder.path != '/';
+
+    return Column(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          color: const Color(0xFF12121A),
+          child: Row(
+            children: [
+              if (canGoUp)
+                IconButton(
+                  icon: const Icon(Icons.arrow_upward_rounded, size: 20),
+                  onPressed: () {
+                    setState(() => _currentFolder = _currentFolder.parent);
+                  },
+                ),
+              Expanded(
+                child: Text(
+                  _currentFolder.path.replaceFirst('/storage/emulated/0', '~'),
+                  style: const TextStyle(fontSize: 12, color: Colors.deepPurpleAccent, fontWeight: FontWeight.bold),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              Text('${entities.length} items', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.only(bottom: 90),
+            itemCount: entities.length,
+            itemBuilder: (context, i) {
+              final e = entities[i];
+              final name = e.uri.pathSegments.where((s) => s.isNotEmpty).last;
+              if (e is Directory) {
+                return ListTile(
+                  leading: const Icon(Icons.folder_rounded, color: Colors.deepPurpleAccent),
+                  title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis),
+                  trailing: const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+                  onTap: () {
+                    setState(() => _currentFolder = Directory(e.path));
+                  },
+                );
+              } else {
+                final matchTrack = _songs.firstWhere(
+                  (t) => t.path == e.path,
+                  orElse: () => AudioTrack(title: name, artist: 'Local Audio', album: 'Storage', path: e.path),
+                );
+                return _buildNamidaTrackTile(matchTrack);
+              }
+            },
+          ),
+        ),
+      ],
+    );
+  }
+
   Widget _buildCoverArt(AudioTrack song, double size, double radius) {
     if (song.albumArt != null && song.albumArt!.isNotEmpty) {
       return ClipRRect(
@@ -2492,6 +2805,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
+      // 0. Home Dashboard
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
@@ -2608,6 +2922,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
+      // 1. Tracks Page (With Folder Browser Toggle)
       _hasPermission
           ? (_isScanning 
               ? const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
@@ -2634,67 +2949,78 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                                 },
                               ),
                               Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                 decoration: BoxDecoration(color: const Color(0xFF16161F), borderRadius: BorderRadius.circular(18)),
                                 child: Row(
                                   children: [
                                     const Icon(Icons.music_note_rounded, size: 14, color: Colors.white70),
-                                    const SizedBox(width: 6),
-                                    Text('${_songs.length} Tracks', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-                                    const SizedBox(width: 2),
-                                    const Icon(Icons.chevron_right_rounded, size: 15, color: Colors.grey),
+                                    const SizedBox(width: 4),
+                                    Text('${_songs.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
                                   ],
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              // Toggle Folder vs Flat Track List
+                              ActionChip(
+                                visualDensity: VisualDensity.compact,
+                                label: Text(_isFolderView ? 'Folders' : 'Tracks', style: const TextStyle(fontSize: 11)),
+                                avatar: Icon(_isFolderView ? Icons.folder_rounded : Icons.queue_music_rounded, size: 14, color: Colors.deepPurpleAccent),
+                                backgroundColor: const Color(0xFF16161F),
+                                onPressed: () => setState(() => _isFolderView = !_isFolderView),
+                              ),
                               const Spacer(),
-                              PopupMenuButton<String>(
-                                color: const Color(0xFF14141F),
-                                onSelected: (val) {
-                                  setState(() {
-                                    if (val == 'Title') {
-                                      _filteredSongs.sort((a, b) => a.title.compareTo(b.title));
-                                    } else if (val == 'Artist') {
-                                      _filteredSongs.sort((a, b) => a.artist.compareTo(b.artist));
-                                    } else if (val == 'Duration') {
-                                      _filteredSongs.sort((a, b) => b.duration.compareTo(a.duration));
-                                    }
-                                  });
-                                },
-                                itemBuilder: (ctx) => const [
-                                  PopupMenuItem(value: 'Title', child: Text('Title')),
-                                  PopupMenuItem(value: 'Artist', child: Text('Artist')),
-                                  PopupMenuItem(value: 'Duration', child: Text('Duration')),
-                                ],
-                                child: Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                  decoration: BoxDecoration(color: const Color(0xFF16161F), borderRadius: BorderRadius.circular(16)),
-                                  child: const Row(
-                                    children: [
-                                      Text('Sort', style: TextStyle(fontSize: 12, color: Colors.white70)),
-                                      SizedBox(width: 4),
-                                      Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: Colors.grey),
-                                    ],
+                              if (!_isFolderView) ...[
+                                PopupMenuButton<String>(
+                                  color: const Color(0xFF14141F),
+                                  onSelected: (val) {
+                                    setState(() {
+                                      if (val == 'Title') {
+                                        _filteredSongs.sort((a, b) => a.title.compareTo(b.title));
+                                      } else if (val == 'Artist') {
+                                        _filteredSongs.sort((a, b) => a.artist.compareTo(b.artist));
+                                      } else if (val == 'Duration') {
+                                        _filteredSongs.sort((a, b) => b.duration.compareTo(a.duration));
+                                      }
+                                    });
+                                  },
+                                  itemBuilder: (ctx) => const [
+                                    PopupMenuItem(value: 'Title', child: Text('Title')),
+                                    PopupMenuItem(value: 'Artist', child: Text('Artist')),
+                                    PopupMenuItem(value: 'Duration', child: Text('Duration')),
+                                  ],
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                    decoration: BoxDecoration(color: const Color(0xFF16161F), borderRadius: BorderRadius.circular(16)),
+                                    child: const Row(
+                                      children: [
+                                        Text('Sort', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                                        SizedBox(width: 4),
+                                        Icon(Icons.keyboard_arrow_down_rounded, size: 16, color: Colors.grey),
+                                      ],
+                                    ),
                                   ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              IconButton(
-                                constraints: const BoxConstraints(),
-                                padding: EdgeInsets.zero,
-                                icon: const Icon(Icons.filter_alt_outlined, size: 19, color: Colors.white70),
-                                onPressed: () {
-                                  setState(() => _filteredSongs = _filteredSongs.reversed.toList());
-                                },
-                              ),
+                                const SizedBox(width: 8),
+                                IconButton(
+                                  constraints: const BoxConstraints(),
+                                  padding: EdgeInsets.zero,
+                                  icon: const Icon(Icons.filter_alt_outlined, size: 19, color: Colors.white70),
+                                  onPressed: () {
+                                    setState(() => _filteredSongs = _filteredSongs.reversed.toList());
+                                  },
+                                ),
+                              ],
                             ],
                           ),
                         ),
                         Expanded(
-                          child: ListView.builder(
-                            padding: const EdgeInsets.only(bottom: 90),
-                            itemCount: _filteredSongs.length,
-                            itemBuilder: (context, index) => _buildNamidaTrackTile(_filteredSongs[index]),
-                          ),
+                          child: _isFolderView
+                              ? _buildFolderExplorer()
+                              : ListView.builder(
+                                  padding: const EdgeInsets.only(bottom: 90),
+                                  itemCount: _filteredSongs.length,
+                                  itemBuilder: (context, index) => _buildNamidaTrackTile(_filteredSongs[index]),
+                                ),
                         ),
                       ],
                     )))
@@ -2706,6 +3032,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               ),
             ),
 
+      // 2. Artists Page
       Column(
         children: [
           Padding(
@@ -2798,13 +3125,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
                               color: const Color(0xFF161622),
-                              image: firstArt != null
-                                  ? DecorationImage(image: MemoryImage(firstArt), fit: BoxFit.cover)
-                                  : null,
+                              image: firstArt != null ? DecorationImage(image: MemoryImage(firstArt), fit: BoxFit.cover) : null,
                             ),
-                            child: firstArt == null
-                                ? const Icon(Icons.person_rounded, size: 32, color: Colors.white38)
-                                : null,
+                            child: firstArt == null ? const Icon(Icons.person_rounded, size: 32, color: Colors.white38) : null,
                           ),
                         ),
                       ),
@@ -2825,6 +3148,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
+      // 3. Playlists Page
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -2888,6 +3212,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
+      // 4. Mornye Tab (With Batch Album Downloader)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -3042,10 +3367,18 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                               icon: const Icon(Icons.download_rounded, color: Colors.deepPurpleAccent),
                               onPressed: () => _downloadMornyeTrack(item),
                             ))
-                      : const Icon(Icons.chevron_right_rounded, color: Colors.grey),
+                      : (item.type == 'album'
+                          ? IconButton(
+                              icon: const Icon(Icons.download_for_offline_rounded, color: Colors.deepPurpleAccent),
+                              tooltip: 'Download Complete Album',
+                              onPressed: () => _batchDownloadAlbum(item),
+                            )
+                          : const Icon(Icons.chevron_right_rounded, color: Colors.grey)),
                   onTap: () {
                     if (item.type == 'song') {
                       _downloadMornyeTrack(item);
+                    } else if (item.type == 'album') {
+                      _batchDownloadAlbum(item);
                     } else {
                       _mornyeSearchController.text = item.title;
                       _searchMornyeCatalog(item.title);
@@ -3153,11 +3486,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             ),
             const Divider(color: Colors.white10),
             ListTile(
-              leading: const Icon(Icons.bar_chart_rounded, color: Colors.deepPurpleAccent),
-              title: const Text('Listening Statistics'),
+              leading: const Icon(Icons.bedtime_rounded, color: Colors.deepPurpleAccent),
+              title: Text(_sleepMinutesRemaining > 0 ? 'Sleep Timer (${_sleepMinutesRemaining}m left)' : 'Sleep Timer'),
               onTap: () {
                 Navigator.pop(context);
-                _openStatisticsScreen();
+                _showSleepTimerDialog();
               },
             ),
             ListTile(
@@ -3166,6 +3499,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               onTap: () {
                 Navigator.pop(context);
                 _showEqualizerSheet();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart_rounded, color: Colors.deepPurpleAccent),
+              title: const Text('Listening Statistics'),
+              onTap: () {
+                Navigator.pop(context);
+                _openStatisticsScreen();
               },
             ),
             ListTile(
@@ -3605,6 +3946,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   }
 }
 
+// Now Playing Screen (Circled button removed; footer holds Repeat, Equalizer, Lyrics, and Queue)
 class NowPlayingModal extends StatefulWidget {
   final AudioPlayer audioPlayer;
   final ValueNotifier<AudioTrack?> currentSongNotifier;
@@ -3612,11 +3954,15 @@ class NowPlayingModal extends StatefulWidget {
   final int totalTrackCount;
   final int currentIndex;
   final List<MornyeExtension> extensions;
+  final int sleepMinutesRemaining;
+  final bool sleepAfterTrack;
   final VoidCallback onShowPath;
   final VoidCallback onShowEqualizer;
+  final VoidCallback onShowSleepTimer;
   final VoidCallback onToggleFavorite;
   final VoidCallback onRefreshLyrics;
   final VoidCallback onEditTags;
+  final VoidCallback onManualSearchLyrics;
   final VoidCallback onPlayPause;
   final VoidCallback onNext;
   final VoidCallback onPrevious;
@@ -3629,11 +3975,15 @@ class NowPlayingModal extends StatefulWidget {
     required this.totalTrackCount,
     required this.currentIndex,
     required this.extensions,
+    required this.sleepMinutesRemaining,
+    required this.sleepAfterTrack,
     required this.onShowPath,
     required this.onShowEqualizer,
+    required this.onShowSleepTimer,
     required this.onToggleFavorite,
     required this.onRefreshLyrics,
     required this.onEditTags,
+    required this.onManualSearchLyrics,
     required this.onPlayPause,
     required this.onNext,
     required this.onPrevious,
@@ -3720,9 +4070,22 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                       ],
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 22),
-                    onPressed: widget.onEditTags,
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          (widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? Icons.bedtime_rounded : Icons.bedtime_outlined,
+                          color: (widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? Colors.deepPurpleAccent : Colors.white70,
+                          size: 20,
+                        ),
+                        onPressed: widget.onShowSleepTimer,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 22),
+                        onPressed: widget.onEditTags,
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -3766,7 +4129,21 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                               final pos = snapshot.data ?? Duration.zero;
                               final lyrics = song?.parsedLyrics ?? [];
                               if (lyrics.isEmpty) {
-                                return const Center(child: Text("No synced lyrics found.", style: TextStyle(color: Colors.white60)));
+                                return Center(
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Text("No synced lyrics found.", style: TextStyle(color: Colors.white60)),
+                                      const SizedBox(height: 10),
+                                      ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(backgroundColor: Colors.deepPurpleAccent),
+                                        icon: const Icon(Icons.search, size: 16),
+                                        label: const Text('Search LRCLIB Manually'),
+                                        onPressed: widget.onManualSearchLyrics,
+                                      ),
+                                    ],
+                                  ),
+                                );
                               }
                               int activeIdx = lyrics.lastIndexWhere((l) => l.timestamp <= pos);
                               if (activeIdx < 0) activeIdx = 0;
@@ -3821,22 +4198,14 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           song?.title ?? 'No Track Selected',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 21,
-                            fontWeight: FontWeight.w800,
-                            color: Colors.white,
-                          ),
+                          style: const TextStyle(fontSize: 21, fontWeight: FontWeight.w800, color: Colors.white),
                         ),
                         const SizedBox(height: 4),
                         Text(
                           song?.artist ?? 'Unknown Artist',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                            fontSize: 14.5,
-                            fontWeight: FontWeight.w500,
-                            color: Colors.white70,
-                          ),
+                          style: const TextStyle(fontSize: 14.5, fontWeight: FontWeight.w500, color: Colors.white70),
                         ),
                       ],
                     ),
@@ -3936,10 +4305,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                         child: Container(
                                           width: 62,
                                           height: 62,
-                                          decoration: BoxDecoration(
-                                            color: Colors.white.withOpacity(0.08),
-                                            shape: BoxShape.circle,
-                                          ),
+                                          decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle),
                                           child: Icon(
                                             isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
                                             size: 34,
@@ -3971,6 +4337,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
               const SizedBox(height: 20),
 
+              // Clean Footer (Circled soundwave button removed)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -3986,10 +4353,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           Container(
                             width: 32,
                             height: 32,
-                            decoration: BoxDecoration(
-                              color: Colors.white.withOpacity(0.08),
-                              shape: BoxShape.circle,
-                            ),
+                            decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle),
                             child: const Icon(Icons.headphones_outlined, size: 16, color: Colors.white70),
                           ),
                           const SizedBox(width: 8),
@@ -3999,22 +4363,13 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                               RichText(
                                 text: TextSpan(
                                   children: [
-                                    const TextSpan(
-                                      text: 'Audio ',
-                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white),
-                                    ),
-                                    TextSpan(
-                                      text: '• $ext • $bitrate kb/s',
-                                      style: const TextStyle(fontSize: 11, color: Colors.white70),
-                                    ),
+                                    const TextSpan(text: 'Audio ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.white)),
+                                    TextSpan(text: '• $ext • $bitrate kb/s', style: const TextStyle(fontSize: 11, color: Colors.white70)),
                                   ],
                                 ),
                               ),
                               const SizedBox(height: 1),
-                              const Text(
-                                '24-bit Hi-Res Lossless',
-                                style: TextStyle(fontSize: 10, color: Colors.white54),
-                              ),
+                              const Text('24-bit Hi-Res Lossless', style: TextStyle(fontSize: 10, color: Colors.white54)),
                             ],
                           ),
                         ],
@@ -4036,15 +4391,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(_isLooping ? 'Loop Single Track Enabled' : 'Loop Disabled')));
                         },
                       ),
-                      const SizedBox(width: 16),
-                      IconButton(
-                        visualDensity: VisualDensity.compact,
-                        padding: EdgeInsets.zero,
-                        constraints: const BoxConstraints(),
-                        icon: const Icon(Icons.graphic_eq_rounded, size: 20, color: Colors.white70),
-                        onPressed: widget.onShowPath,
-                      ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 18),
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
@@ -4052,7 +4399,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                         icon: const Icon(Icons.tune_rounded, size: 20, color: Colors.white70),
                         onPressed: widget.onShowEqualizer,
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 18),
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,
@@ -4063,7 +4410,7 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                           if (_viewMode == 1) widget.onRefreshLyrics();
                         },
                       ),
-                      const SizedBox(width: 16),
+                      const SizedBox(width: 18),
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,

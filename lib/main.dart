@@ -2739,6 +2739,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
+      // 0. Home Dashboard
       ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -2848,7 +2849,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 1. Tracks Page
+      // 1. Tracks Page (with tight 1.5px gaps)
       _hasPermission
           ? (_isScanning
               ? Center(child: CircularProgressIndicator(color: Theme.of(context).colorScheme.primary))
@@ -2915,7 +2916,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         },
       ),
 
-      // 3. Playlists Page
+      // 3. Playlists Page (with 4 stat cards)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -2977,7 +2978,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 4. Mornye Tab
+      // 4. Mornye Tab (Search + Batch Download)
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -3280,12 +3281,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
     );
-  }
-
-  String _formatDurationPadded(Duration d) {
-    int minutes = d.inMinutes;
-    int seconds = d.inSeconds % 60;
-    return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
   }
 }
 

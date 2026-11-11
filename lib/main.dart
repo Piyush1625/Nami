@@ -196,7 +196,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   int _artistGridColumns = 4;
   String _artistSortOrder = "Artist";
 
-  // Functional Settings state
   bool _usbDacExclusive = true;
   bool _gaplessPlayback = true;
   bool _mediaNotificationEnabled = true;
@@ -209,7 +208,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   String? _userPhotoPath;
   List<String> _deviceImages = [];
 
-  // Equalizer state
   final Map<String, double> _eqBands = {
     '60Hz': 3.0,
     '230Hz': 1.5,
@@ -219,7 +217,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   };
   String _selectedEqPreset = 'Hi-Fi Master';
 
-  // Mornye state
   final TextEditingController _mornyeSearchController = TextEditingController();
   List<MornyeCatalogItem> _mornyeResults = [];
   bool _isMornyeSearching = false;
@@ -246,6 +243,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   static const List<String> _monthNames = [
     'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
   ];
+
+  final Map<String, List<AudioTrack>> artistGroups = {};
 
   @override
   void initState() {
@@ -402,7 +401,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           }
         }
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('Error scanning music: $e');
+    }
 
     foundTracks.sort((a, b) => a.title.toLowerCase().compareTo(b.title.toLowerCase()));
 
@@ -1477,7 +1478,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  // Functional Equalizer Sheet with real presets and band adjustments
   void _showEqualizerSheet() {
     showModalBottomSheet(
       context: context,
@@ -2479,16 +2479,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 
   @override
-  void dispose() {
-    _audioPlayer.dispose();
-    _searchController.dispose();
-    _mornyeSearchController.dispose();
-    super.dispose();
-  }
-
-  final Map<String, List<AudioTrack>> artistGroups = {};
-
-  @override
   Widget build(BuildContext context) {
     artistGroups.clear();
     for (var song in _songs) {
@@ -2502,7 +2492,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
-      // 0. Home Dashboard
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 100),
         children: [
@@ -2619,7 +2608,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 1. Tracks Page
       _hasPermission
           ? (_isScanning 
               ? const Center(child: CircularProgressIndicator(color: Colors.deepPurpleAccent))
@@ -2718,7 +2706,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               ),
             ),
 
-      // 2. Artists Page
       Column(
         children: [
           Padding(
@@ -2838,7 +2825,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 3. Playlists Page
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -2902,7 +2888,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 4. Mornye Tab
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -3276,7 +3261,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 }
 
-// Namida Complete Settings Screen with Theme, Playback & Customizations Sub-Menus (SS8)
 class MainSettingsScreen extends StatefulWidget {
   final bool usbDacExclusive;
   final bool gaplessPlayback;
@@ -3515,7 +3499,6 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
   }
 }
 
-// Namida Statistics Dashboard Screen (SS6 & SS7)
 class StatisticsScreen extends StatefulWidget {
   final int songsCount;
   final int artistsCount;
@@ -3559,7 +3542,7 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
-                const Row(
+                Row(
                   mainAxisAlignment: MainAxisAlignment.spaceAround,
                   children: [
                     _statItem('32', 'Genres', Icons.category),
@@ -3622,7 +3605,6 @@ class _StatisticsScreenState extends State<StatisticsScreen> {
   }
 }
 
-// Now Playing Screen (SS9: Top-Right 3-Dots Tag Editor, Bottom-Right Lyrics Button, 9-Line Centered Lyrics)
 class NowPlayingModal extends StatefulWidget {
   final AudioPlayer audioPlayer;
   final ValueNotifier<AudioTrack?> currentSongNotifier;
@@ -3662,7 +3644,7 @@ class NowPlayingModal extends StatefulWidget {
 }
 
 class _NowPlayingModalState extends State<NowPlayingModal> {
-  int _viewMode = 0; // 0 = Artwork, 1 = Synced Lyrics
+  int _viewMode = 0;
   bool _isLooping = false;
   final ScrollController _lyricsScrollCtrl = ScrollController();
   int _lastScrolledLyricIndex = -1;
@@ -3703,7 +3685,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
       builder: (context, song, _) {
         final ext = (song?.path.split('.').last ?? 'FLAC').toUpperCase();
         final bitrate = song?.bitrateKbps ?? 1790;
-        final kHz = ((song?.sampleRateHz ?? 48000) / 1000.0).toStringAsFixed(1);
         final artSize = MediaQuery.of(context).size.width * 0.77;
 
         return Container(
@@ -3715,7 +3696,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
           ),
           child: Column(
             children: [
-              // Top Bar: Down arrow | Track Index + Album | Top-Right 3-Dots for Tag Editing (SS9!)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -3780,7 +3760,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                                     ),
                             ),
                           )
-                        // Synced Lyrics View strictly bounded to 9 lines with active line on 5th center line!
                         : StreamBuilder<Duration>(
                             stream: widget.audioPlayer.positionStream,
                             builder: (context, snapshot) {
@@ -3992,7 +3971,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
 
               const SizedBox(height: 20),
 
-              // Footer: Audio Path on Bottom Left, 4 Action Buttons on Bottom Right (SS9!)
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 crossAxisAlignment: CrossAxisAlignment.center,
@@ -4075,7 +4053,6 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
                         onPressed: widget.onShowEqualizer,
                       ),
                       const SizedBox(width: 16),
-                      // Bottom-Right Circle Lyrics Toggle Button (SS9!)
                       IconButton(
                         visualDensity: VisualDensity.compact,
                         padding: EdgeInsets.zero,

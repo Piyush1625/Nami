@@ -16,6 +16,30 @@ String _formatDurationPadded(Duration d) {
   return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
 }
 
+Color _extractDominantColor(Uint8List? bytes, Color fallback) {
+  if (bytes == null || bytes.length < 500) return fallback;
+  try {
+    int rTotal = 0, gTotal = 0, bTotal = 0, count = 0;
+    int step = math.max(1, bytes.length ~/ 120);
+    for (int i = 64; i < bytes.length - 3; i += step) {
+      int r = bytes[i];
+      int g = bytes[i + 1];
+      int b = bytes[i + 2];
+      int brightness = (r * 299 + g * 587 + b * 114) ~/ 1000;
+      if (brightness > 45 && brightness < 225) {
+        rTotal += r;
+        gTotal += g;
+        bTotal += b;
+        count++;
+      }
+    }
+    if (count > 0) {
+      return Color.fromARGB(255, rTotal ~/ count, gTotal ~/ count, bTotal ~/ count);
+    }
+  } catch (_) {}
+  return fallback;
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NamiApp());
@@ -96,6 +120,7 @@ class AudioTrack {
   int bitrateKbps;
   int sampleRateHz;
   int bitDepth;
+  int playCount;
 
   AudioTrack({
     required this.title,
@@ -120,13 +145,54 @@ class AudioTrack {
     this.bitrateKbps = 1790,
     this.sampleRateHz = 44100,
     this.bitDepth = 24,
+    this.playCount = 0,
   }) : parsedLyrics = parsedLyrics ?? [];
+
+  Map<String, dynamic> toJson() => {
+    'title': title,
+    'artist': artist,
+    'album': album,
+    'genre': genre,
+    'path': path,
+    'year': year,
+    'trackNumber': trackNumber,
+    'durationSec': duration.inSeconds,
+    'bitrate': bitrateKbps,
+    'sampleRate': sampleRateHz,
+    'bitDepth': bitDepth,
+    'isFavorite': isFavorite,
+    'playCount': playCount,
+    'addedDate': addedDate,
+  };
+
+  factory AudioTrack.fromJson(Map<String, dynamic> j) => AudioTrack(
+    title: j['title'] ?? 'Unknown',
+    artist: j['artist'] ?? 'Unknown Artist',
+    album: j['album'] ?? 'Unknown Album',
+    genre: j['genre'] ?? 'Music',
+    path: j['path'] ?? '',
+    year: j['year'] ?? '2026',
+    trackNumber: j['trackNumber'] ?? '1',
+    duration: Duration(seconds: j['durationSec'] ?? 210),
+    bitrateKbps: j['bitrate'] ?? 1411,
+    sampleRateHz: j['sampleRate'] ?? 44100,
+    bitDepth: j['bitDepth'] ?? 16,
+    isFavorite: j['isFavorite'] ?? false,
+    playCount: j['playCount'] ?? 0,
+    addedDate: j['addedDate'] ?? 'Sep 2026',
+    isMetadataLoaded: true,
+  );
 }
 
 class CustomPlaylist {
   String name;
   List<AudioTrack> tracks;
   CustomPlaylist({required this.name, required this.tracks});
+
+  Map<String, dynamic> toJson() => {
+    'name': name,
+    'paths': tracks.map((t) => t.path).toList(),
+  };
 }
 
 class MornyeExtension {
@@ -192,6 +258,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     handleAudioSessionActivation: true,
   );
 
+  final ScrollController _trackListScrollController = ScrollController();
   bool _hasPermission = false;
   bool _isScanning = false;
   List<AudioTrack> _songs = [];
@@ -206,7 +273,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   AudioTrack? get _currentSong => _currentSongNotifier.value;
   set _currentSong(AudioTrack? val) => _currentSongNotifier.value = val;
 
-  bool _isPlaying = false;
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
 
@@ -219,8 +285,12 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 
   Timer? _sleepTimer;
   Timer? _fadeTimer;
+  Timer? _telemetryTimer;
   int _sleepMinutesRemaining = 0;
   bool _sleepAfterCurrentTrack = false;
+
+  int _totalListenSeconds = 0;
+  int _currentTrackSecondsListened = 0;
 
   double _playbackSpeed = 1.0;
   String _soundstagePreset = 'Off';
@@ -235,7 +305,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   String _connectedDacName = "KEFINE";
   String _userName = "Piyush";
   String? _userPhotoPath;
-  List<String> _deviceImages = [];
 
   final Map<String, double> _eqBands = {
     '60Hz': 3.0,
@@ -284,13 +353,14 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   void initState() {
     super.initState();
     _initAudioSessionAndDac();
+    _loadStateCache();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _requestPermissionsAndInitBackground();
     });
 
     _audioPlayer.playerStateStream.listen((state) {
-      if (mounted) setState(() => _isPlaying = state.playing);
+      if (mounted) setState(() {});
       if (state.processingState == ProcessingState.completed) {
         if (_sleepAfterCurrentTrack) {
           _audioPlayer.pause();
@@ -310,6 +380,104 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
       }
     });
+
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+      if (_audioPlayer.playing) {
+        _totalListenSeconds++;
+        _currentTrackSecondsListened++;
+        if (_currentTrackSecondsListened == 25 && _currentSong != null) {
+          _currentSong!.playCount++;
+          _saveStateCache();
+        }
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _telemetryTimer?.cancel();
+    _deviceSub?.cancel();
+    _audioPlayer.dispose();
+    _trackListScrollController.dispose();
+    super.dispose();
+  }
+
+  Future<File> get _cacheFile async => File('/storage/emulated/0/Music/.nami_cache.json');
+
+  Future<void> _loadStateCache() async {
+    try {
+      final f = await _cacheFile;
+      if (await f.exists()) {
+        final data = jsonDecode(await f.readAsString());
+        if (data is Map<String, dynamic>) {
+          _totalListenSeconds = data['totalListenSeconds'] ?? 0;
+          _userName = data['userName'] ?? 'Piyush';
+          _userPhotoPath = data['userPhotoPath'];
+          if (data['accentColor'] != null) {
+            final c = Color(data['accentColor']);
+            NamiApp.of(context).updateTheme(newAccent: c);
+          }
+          final cachedSongs = (data['cachedTracks'] as List?)?.map((t) => AudioTrack.fromJson(t)).toList() ?? [];
+          if (cachedSongs.isNotEmpty) {
+            setState(() {
+              _songs = cachedSongs;
+              _filteredSongs = List.from(cachedSongs);
+            });
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _saveStateCache() async {
+    try {
+      final f = await _cacheFile;
+      final map = {
+        'totalListenSeconds': _totalListenSeconds,
+        'userName': _userName,
+        'userPhotoPath': _userPhotoPath,
+        'accentColor': NamiApp.of(context).accentColor.value,
+        'cachedTracks': _songs.map((s) => s.toJson()).toList(),
+      };
+      await f.writeAsString(jsonEncode(map));
+    } catch (_) {}
+  }
+
+  Future<void> _exportBackup() async {
+    try {
+      final backupFile = File('/storage/emulated/0/Download/nami_backup.json');
+      final map = {
+        'totalListenSeconds': _totalListenSeconds,
+        'userName': _userName,
+        'accentColor': NamiApp.of(context).accentColor.value,
+        'favorites': _songs.where((s) => s.isFavorite).map((s) => s.path).toList(),
+        'playlists': _customPlaylists.map((p) => p.toJson()).toList(),
+      };
+      await backupFile.writeAsString(jsonEncode(map));
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup exported to /Download/nami_backup.json')));
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Backup failed: $e')));
+    }
+  }
+
+  Future<void> _importBackup() async {
+    try {
+      final backupFile = File('/storage/emulated/0/Download/nami_backup.json');
+      if (await backupFile.exists()) {
+        final map = jsonDecode(await backupFile.readAsString());
+        final favPaths = Set<String>.from(map['favorites'] ?? []);
+        for (var s in _songs) {
+          if (favPaths.contains(s.path)) s.isFavorite = true;
+        }
+        setState(() {});
+        _saveStateCache();
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Backup restored successfully!')));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No backup found in /Download/nami_backup.json')));
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Import failed: $e')));
+    }
   }
 
   Future<void> _initAudioSessionAndDac() async {
@@ -431,11 +599,28 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     });
   }
 
+  void _locateActivePlayingTrack() {
+    if (_currentSong == null || _filteredSongs.isEmpty) return;
+    int idx = _filteredSongs.indexOf(_currentSong!);
+    if (idx != -1 && _trackListScrollController.hasClients) {
+      _trackListScrollController.animateTo(
+        idx * 60.0,
+        duration: const Duration(milliseconds: 400),
+        curve: Curves.easeOutCubic,
+      );
+    }
+  }
+
   Future<void> _playSong(AudioTrack song) async {
     if (song.path.isEmpty) return;
     _currentSong = song;
+    _currentTrackSecondsListened = 0;
     if (!_historyTracks.contains(song)) {
       _historyTracks.insert(0, song);
+    }
+    if (_autoColoring && song.albumArt != null) {
+      final dominant = _extractDominantColor(song.albumArt, const Color(0xFFE53935));
+      NamiApp.of(context).updateTheme(newAccent: dominant);
     }
     if (mounted) setState(() {});
     _fetchLyricsOnline(song);
@@ -450,6 +635,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
         if (mounted) setState(() {});
       }
+      _saveStateCache();
     } catch (_) {}
   }
 
@@ -681,59 +867,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     );
   }
 
-  void _showExtensionRepoDialog() {
-    final urlCtrl = TextEditingController(text: _mornyeRepoUrl);
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF14141F),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        title: const Text('Extension Repository', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text('Current repository:', style: TextStyle(fontSize: 12, color: Colors.grey)),
-            const SizedBox(height: 4),
-            Text(_mornyeRepoUrl, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary)),
-            const SizedBox(height: 14),
-            TextField(
-              controller: urlCtrl,
-              decoration: const InputDecoration(
-                hintText: 'Enter registry JSON URL...',
-                filled: true,
-                fillColor: Color(0xFF0A0A0E),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
-            onPressed: () {
-              setState(() => _mornyeRepoUrl = "");
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Extension repository removed.')));
-            },
-            child: const Text('Remove'),
-          ),
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
-            onPressed: () {
-              if (urlCtrl.text.trim().isNotEmpty) {
-                setState(() => _mornyeRepoUrl = urlCtrl.text.trim());
-              }
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repository saved successfully!')));
-            },
-            child: const Text('Save'),
-          ),
-        ],
-      ),
-    );
-  }
-
   Future<void> _requestPermissionsAndInitBackground() async {
     PermissionStatus status = await Permission.audio.request();
     await Permission.photos.request();
@@ -749,37 +882,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     if (status.isGranted || await Permission.storage.isGranted || await Permission.manageExternalStorage.isGranted) {
       setState(() {
         _hasPermission = true;
-        _isScanning = true;
+        if (_songs.isEmpty) _isScanning = true;
       });
       await _fastScanDeviceMusic();
-      _scanUserPhotosInBackground();
     }
-  }
-
-  Future<void> _scanUserPhotosInBackground() async {
-    List<String> imgs = [];
-    final dirs = [
-      Directory('/storage/emulated/0/Download'),
-      Directory('/storage/emulated/0/Pictures'),
-      Directory('/storage/emulated/0/DCIM/Camera'),
-    ];
-    for (var d in dirs) {
-      try {
-        if (await d.exists()) {
-          await for (var entity in d.list(recursive: false, followLinks: false)) {
-            if (entity is File) {
-              final l = entity.path.toLowerCase();
-              if (l.endsWith('.jpg') || l.endsWith('.jpeg') || l.endsWith('.png') || l.endsWith('.webp')) {
-                imgs.add(entity.path);
-                if (imgs.length >= 24) break;
-              }
-            }
-          }
-        }
-      } catch (_) {}
-      if (imgs.length >= 24) break;
-    }
-    if (mounted) setState(() => _deviceImages = imgs);
   }
 
   Future<void> _fastScanDeviceMusic() async {
@@ -856,6 +962,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       }
     }
     if (mounted) setState(() {});
+    _saveStateCache();
   }
 
   Future<void> _extractAudioMetadata(AudioTrack track) async {
@@ -895,45 +1002,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               }
             }
             if (bps >= 16) track.bitDepth = bps;
-          } else if (blockType == 4 && offset + length <= data.length) {
-            int p = offset;
-            final blockEnd = offset + length;
-            if (p + 4 <= blockEnd) {
-              int vendorLen = data[p] | (data[p + 1] << 8) | (data[p + 2] << 16) | (data[p + 3] << 24);
-              p += 4 + vendorLen;
-              if (p + 4 <= blockEnd) {
-                int commentCount = data[p] | (data[p + 1] << 8) | (data[p + 2] << 16) | (data[p + 3] << 24);
-                p += 4;
-                for (int c = 0; c < commentCount && p + 4 <= blockEnd; c++) {
-                  int cLen = data[p] | (data[p + 1] << 8) | (data[p + 2] << 16) | (data[p + 3] << 24);
-                  p += 4;
-                  if (cLen < 0 || p + cLen > blockEnd) break;
-                  final commentStr = utf8.decode(data.sublist(p, p + cLen), allowMalformed: true);
-                  p += cLen;
-                  final eqIdx = commentStr.indexOf('=');
-                  if (eqIdx > 0) {
-                    final key = commentStr.substring(0, eqIdx).trim().toUpperCase();
-                    final val = _sanitizeMetadataText(commentStr.substring(eqIdx + 1));
-                    if (val.isNotEmpty) {
-                      if (key == 'TITLE') track.title = val;
-                      else if (key == 'ARTIST' || key == 'ALBUMARTIST' || key == 'PERFORMER') {
-                        if (track.artist == 'Unknown Artist' || track.artist.isEmpty) track.artist = val;
-                        else if (!track.artist.contains(val)) track.artist = '${track.artist}, $val';
-                      } else if (key == 'ALBUM') track.album = val;
-                      else if (key == 'GENRE') track.genre = val;
-                      else if (key == 'COMPOSER') track.composer = val;
-                      else if (key == 'COMMENT') track.comment = val;
-                      else if (key == 'DATE' || key == 'YEAR') track.year = val;
-                      else if (key == 'TRACKNUMBER') track.trackNumber = val;
-                      else if (key == 'LYRICS' || key == 'UNSYNCEDLYRICS') {
-                        track.rawLyrics = commentStr.substring(eqIdx + 1).trim();
-                        track.parsedLyrics = _parseLrc(track.rawLyrics);
-                      }
-                    }
-                  }
-                }
-              }
-            }
           } else if (blockType == 6 && offset + length <= data.length) {
             int picOffset = offset + 4;
             int mimeLen = (data[picOffset] << 24) | (data[picOffset + 1] << 16) | (data[picOffset + 2] << 8) | data[picOffset + 3];
@@ -960,53 +1028,25 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         while (offset + 10 < maxOffset) {
           String frameId = String.fromCharCodes(data.sublist(offset, offset + 4));
           if (!RegExp(r'^[A-Z0-9]{4}$').hasMatch(frameId)) break;
-          int frameSize;
-          if (version == 4) {
-            frameSize = ((data[offset + 4] & 0x7F) << 21) | ((data[offset + 5] & 0x7F) << 14) | ((data[offset + 6] & 0x7F) << 7) | (data[offset + 7] & 0x7F);
-          } else {
-            frameSize = (data[offset + 4] << 24) | (data[offset + 5] << 16) | (data[offset + 6] << 8) | data[offset + 7];
-          }
+          int frameSize = (version == 4)
+              ? (((data[offset + 4] & 0x7F) << 21) | ((data[offset + 5] & 0x7F) << 14) | ((data[offset + 6] & 0x7F) << 7) | (data[offset + 7] & 0x7F))
+              : ((data[offset + 4] << 24) | (data[offset + 5] << 16) | (data[offset + 6] << 8) | data[offset + 7]);
           offset += 10;
           if (frameSize <= 0 || offset + frameSize > maxOffset) break;
 
           if (frameId == 'TIT2') {
             final t = _decodeId3Text(data.sublist(offset, offset + frameSize));
             if (t.isNotEmpty) track.title = t;
-          } else if (frameId == 'TPE1' || frameId == 'TPE2' || frameId == 'TEXT') {
+          } else if (frameId == 'TPE1' || frameId == 'TPE2') {
             final a = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (a.isNotEmpty) {
-              if (track.artist == 'Unknown Artist' || track.artist.isEmpty) track.artist = a;
-              else if (!track.artist.contains(a)) track.artist = '${track.artist}, $a';
-            }
+            if (a.isNotEmpty) track.artist = a;
           } else if (frameId == 'TALB') {
             final al = _decodeId3Text(data.sublist(offset, offset + frameSize));
             if (al.isNotEmpty) track.album = al;
-          } else if (frameId == 'TCON') {
-            final g = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (g.isNotEmpty) track.genre = g;
-          } else if (frameId == 'TCOM') {
-            final c = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (c.isNotEmpty) track.composer = c;
-          } else if (frameId == 'COMM') {
-            final comm = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (comm.isNotEmpty) track.comment = comm;
-          } else if (frameId == 'TYER' || frameId == 'TDRC') {
-            final y = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (y.isNotEmpty) track.year = y;
-          } else if (frameId == 'TRCK') {
-            final tr = _decodeId3Text(data.sublist(offset, offset + frameSize));
-            if (tr.isNotEmpty) track.trackNumber = tr;
           } else if (frameId == 'APIC' && track.albumArt == null) {
             track.albumArt = _extractEmbeddedImageBytes(data, offset, offset + frameSize);
           }
           offset += frameSize;
-        }
-      }
-
-      if (track.artist == 'Unknown Artist' || track.artist.isEmpty) {
-        final fileName = File(track.path).uri.pathSegments.last;
-        if (fileName.contains(' - ')) {
-          track.artist = _sanitizeMetadataText(fileName.split(' - ')[0]);
         }
       }
 
@@ -1018,38 +1058,17 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
   }
 
   String _sanitizeMetadataText(String input) {
-    String s = input.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
-    return s.replaceAll(RegExp(r'[#<>%+^~|]+$'), '').trim();
+    return input.replaceAll(RegExp(r'[\x00-\x1F\x7F]'), '').trim();
   }
 
   String _decodeId3Text(Uint8List bytes) {
     if (bytes.isEmpty) return '';
     int encoding = bytes[0];
     Uint8List content = bytes.sublist(1);
-
     if (encoding == 0) {
       final nullIdx = content.indexOf(0);
       if (nullIdx >= 0) content = content.sublist(0, nullIdx);
       return _sanitizeMetadataText(latin1.decode(content, allowInvalid: true));
-    } else if (encoding == 1 || encoding == 2) {
-      int start = 0;
-      bool littleEndian = true;
-      if (content.length >= 2) {
-        if (content[0] == 0xFF && content[1] == 0xFE) {
-          littleEndian = true;
-          start = 2;
-        } else if (content[0] == 0xFE && content[1] == 0xFF) {
-          littleEndian = false;
-          start = 2;
-        }
-      }
-      final List<int> codeUnits = [];
-      for (int i = start; i + 1 < content.length; i += 2) {
-        int unit = littleEndian ? (content[i] | (content[i + 1] << 8)) : ((content[i] << 8) | content[i + 1]);
-        if (unit == 0) break;
-        codeUnits.add(unit);
-      }
-      return _sanitizeMetadataText(String.fromCharCodes(codeUnits));
     } else {
       final nullIdx = content.indexOf(0);
       if (nullIdx >= 0) content = content.sublist(0, nullIdx);
@@ -1100,12 +1119,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
       }
     }
-    if (result.isEmpty && raw.trim().isNotEmpty) {
-      final plainLines = raw.split('\n').where((l) => l.trim().isNotEmpty).toList();
-      for (int i = 0; i < plainLines.length; i++) {
-        result.add(LyricLine(timestamp: Duration(seconds: i * 4), text: plainLines[i].trim()));
-      }
-    }
     result.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     return result;
   }
@@ -1134,7 +1147,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       final getUri = Uri.parse(
         'https://lrclib.net/api/get?track_name=${Uri.encodeComponent(cleanTitle)}&artist_name=${Uri.encodeComponent(primaryArtist)}',
       );
-      final getRes = await http.get(getUri, headers: {'User-Agent': 'NamiMusicPlayer/1.0'}).timeout(const Duration(seconds: 5));
+      final getRes = await http.get(getUri, headers: {'User-Agent': 'NamiMusicPlayer/1.0'}).timeout(const Duration(seconds: 4));
       if (getRes.statusCode == 200) {
         final Map<String, dynamic> data = jsonDecode(getRes.body);
         final String? synced = data['syncedLyrics']?.toString();
@@ -1147,35 +1160,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           return;
         }
       }
-
-      final searchUri = Uri.parse(
-        'https://lrclib.net/api/search?q=${Uri.encodeComponent("$cleanTitle $primaryArtist")}',
-      );
-      final searchRes = await http.get(searchUri, headers: {'User-Agent': 'NamiMusicPlayer/1.0'}).timeout(const Duration(seconds: 5));
-      if (searchRes.statusCode == 200) {
-        final dynamic list = jsonDecode(searchRes.body);
-        if (list is List && list.isNotEmpty) {
-          final best = list.firstWhere(
-            (item) => item['syncedLyrics'] != null && item['syncedLyrics'].toString().isNotEmpty,
-            orElse: () => list.first,
-          );
-          final String? synced = best['syncedLyrics']?.toString();
-          final String? plain = best['plainLyrics']?.toString();
-          if ((synced != null && synced.isNotEmpty) || (plain != null && plain.isNotEmpty)) {
-            song.rawLyrics = (synced != null && synced.isNotEmpty) ? synced : plain!;
-            song.parsedLyrics = _parseLrc(song.rawLyrics);
-            song.isLyricsFetched = true;
-            if (mounted) setState(() {});
-            return;
-          }
-        }
-      }
     } catch (_) {}
-    if (song.parsedLyrics.isEmpty) {
-      song.rawLyrics = "[00:00.00] Instrumental / No Synced Lyrics Found";
-      song.parsedLyrics = _parseLrc(song.rawLyrics);
-    }
-    if (mounted) setState(() {});
   }
 
   void _showManualLyricsSearchDialog(AudioTrack song) {
@@ -1216,7 +1201,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                         final res = await http.get(
                           Uri.parse('https://lrclib.net/api/search?q=${Uri.encodeComponent(searchCtrl.text.trim())}'),
                           headers: {'User-Agent': 'NamiMusicPlayer/1.0'},
-                        ).timeout(const Duration(seconds: 7));
+                        ).timeout(const Duration(seconds: 6));
                         if (res.statusCode == 200) {
                           final data = jsonDecode(res.body);
                           if (data is List) {
@@ -1373,11 +1358,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final artistCtrl = TextEditingController(text: song.artist);
     final albumCtrl = TextEditingController(text: song.album);
     final genreCtrl = TextEditingController(text: song.genre);
-    final albumArtistCtrl = TextEditingController(text: song.albumArtist);
-    final composerCtrl = TextEditingController(text: song.composer);
-    final commentCtrl = TextEditingController(text: song.comment);
-    final trackNumCtrl = TextEditingController(text: song.trackNumber);
-    final yearCtrl = TextEditingController(text: song.year);
     final lyricsCtrl = TextEditingController(text: song.rawLyrics);
 
     showModalBottomSheet(
@@ -1401,7 +1381,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     style: TextButton.styleFrom(
                       foregroundColor: Theme.of(context).colorScheme.primary,
                       backgroundColor: Theme.of(context).colorScheme.primary.withOpacity(0.12),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     ),
                     icon: const Icon(Icons.cloud_download_rounded, size: 16),
                     label: const Text('Search Lyrics', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
@@ -1410,14 +1389,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                       _showManualLyricsSearchDialog(song);
                     },
                   ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              Row(
-                children: [
-                  Expanded(child: _buildRichInputField(trackNumCtrl, 'Track Number')),
-                  const SizedBox(width: 12),
-                  Expanded(child: _buildRichInputField(yearCtrl, 'Year / Date')),
                 ],
               ),
               const SizedBox(height: 10),
@@ -1429,12 +1400,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               const SizedBox(height: 10),
               _buildRichInputField(genreCtrl, 'Genre'),
               const SizedBox(height: 10),
-              _buildRichInputField(albumArtistCtrl, 'Album Artist'),
-              const SizedBox(height: 10),
-              _buildRichInputField(composerCtrl, 'Composer'),
-              const SizedBox(height: 10),
-              _buildRichInputField(commentCtrl, 'Comment'),
-              const SizedBox(height: 10),
               _buildRichInputField(lyricsCtrl, 'Lyrics (.LRC timestamps)', maxLines: 3),
               const SizedBox(height: 16),
               Row(
@@ -1443,23 +1408,19 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Colors.grey))),
                   const SizedBox(width: 10),
                   ElevatedButton(
-                    style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14))),
+                    style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
                     onPressed: () {
                       setState(() {
                         song.title = titleCtrl.text.trim();
                         song.artist = artistCtrl.text.trim();
                         song.album = albumCtrl.text.trim();
                         song.genre = genreCtrl.text.trim();
-                        song.albumArtist = albumArtistCtrl.text.trim();
-                        song.composer = composerCtrl.text.trim();
-                        song.comment = commentCtrl.text.trim();
-                        song.trackNumber = trackNumCtrl.text.trim();
-                        song.year = yearCtrl.text.trim();
                         song.rawLyrics = lyricsCtrl.text;
                         song.parsedLyrics = _parseLrc(song.rawLyrics);
                       });
                       Navigator.pop(context);
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tags successfully saved!')));
+                      _saveStateCache();
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Tags saved!')));
                     },
                     child: const Text('Save'),
                   ),
@@ -1495,7 +1456,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       builder: (context) => AlertDialog(
         backgroundColor: const Color(0xFF14141F),
         title: const Text('Delete File Forever?', style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold)),
-        content: Text('This will permanently delete "${song.title}" from your device storage. This action cannot be undone.', style: const TextStyle(color: Colors.white70)),
+        content: Text('Permanently delete "${song.title}" from storage? This cannot be undone.', style: const TextStyle(color: Colors.white70)),
         actions: [
           TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
           ElevatedButton(
@@ -1513,9 +1474,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     _currentSong = null;
                   }
                 });
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File permanently deleted from device.')));
+                _saveStateCache();
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('File permanently deleted.')));
               } catch (e) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed to delete file: $e')));
+                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Failed: $e')));
               }
             },
             child: const Text('Delete Forever'),
@@ -1713,7 +1675,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Text('Tempo / Speed: ${_playbackSpeed.toStringAsFixed(2)}x', style: const TextStyle(fontSize: 12)),
+                  Text('Tempo: ${_playbackSpeed.toStringAsFixed(2)}x', style: const TextStyle(fontSize: 12)),
                   Slider(
                     value: _playbackSpeed,
                     min: 0.5,
@@ -1758,7 +1720,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     setState(() => _downloadingTitles.add(item.title));
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('Downloading "${item.title}" ($_mornyeAudioQuality) via ${item.service}...'),
+        content: Text('Downloading "${item.title}" (${item.service})...'),
         backgroundColor: Theme.of(context).colorScheme.primary,
       ),
     );
@@ -1776,29 +1738,18 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         final outFile = File(savePath);
         await outFile.writeAsBytes(audioRes.bodyBytes);
 
-        Uint8List? downloadedArt;
-        if (_mornyeEmbedArt && item.artworkUrl != null) {
-          try {
-            final artRes = await http.get(Uri.parse(item.artworkUrl!)).timeout(const Duration(seconds: 8));
-            if (artRes.statusCode == 200) downloadedArt = artRes.bodyBytes;
-          } catch (_) {}
-        }
-
         final newTrack = AudioTrack(
           title: item.title,
           artist: item.artist,
           album: item.album,
           path: savePath,
-          albumArt: downloadedArt,
           addedDate: "Sep 2026",
           fileSize: audioRes.bodyBytes.length,
           duration: Duration(seconds: item.durationSeconds),
           isMetadataLoaded: true,
         );
 
-        if (_mornyeAutoLrc) {
-          _fetchLyricsOnline(newTrack);
-        }
+        _fetchLyricsOnline(newTrack);
 
         setState(() {
           _songs.insert(0, newTrack);
@@ -1806,32 +1757,20 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           _downloadingTitles.remove(item.title);
         });
 
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Saved to $savePath & added to Library!'),
-              action: SnackBarAction(
-                label: 'PLAY',
-                textColor: Colors.white,
-                onPressed: () => _playSong(newTrack),
-              ),
-            ),
-          );
-        }
+        _saveStateCache();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Saved "${item.title}" to Library!')));
       } else {
         setState(() => _downloadingTitles.remove(item.title));
       }
     } catch (e) {
       setState(() => _downloadingTitles.remove(item.title));
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e')));
-      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Download failed: $e')));
     }
   }
 
   Future<void> _batchDownloadAlbum(MornyeCatalogItem albumItem) async {
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Fetching tracks for "${albumItem.title}"...'), backgroundColor: Theme.of(context).colorScheme.primary),
+      SnackBar(content: Text('Fetching album "${albumItem.title}"...'), backgroundColor: Theme.of(context).colorScheme.primary),
     );
     try {
       final uri = Uri.parse(
@@ -1843,15 +1782,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       if (res.statusCode == 200) {
         final decoded = jsonDecode(res.body);
         final list = (decoded['results'] as List?)?.where((i) => i['wrapperType'] == 'track' || i['kind'] == 'song').toList() ?? [];
-        if (list.isEmpty) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('No tracks found for this release.')));
-          return;
-        }
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Downloading ${list.length} tracks...'), backgroundColor: Theme.of(context).colorScheme.primary),
-        );
-
         for (var t in list) {
           final item = MornyeCatalogItem(
             title: t['trackName'] ?? 'Track',
@@ -1867,7 +1797,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         }
       }
     } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Batch download error: $e')));
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Error: $e')));
     }
   }
 
@@ -1884,8 +1814,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         final Map<String, dynamic> decoded = jsonDecode(res.body);
         final List results = decoded['results'] ?? [];
         final List<MornyeCatalogItem> items = [];
-        final Set<String> seenArtists = {};
-        final Set<String> seenAlbums = {};
 
         for (var item in results) {
           if (item is Map) {
@@ -1909,33 +1837,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               durationSeconds: timeMs ~/ 1000,
               collectionId: collectionId,
             ));
-
-            if (!seenArtists.contains(artist)) {
-              seenArtists.add(artist);
-              items.add(MornyeCatalogItem(
-                title: artist,
-                artist: artist,
-                album: '',
-                subtitle: 'Artist • via $_selectedMornyeService',
-                type: 'artist',
-                service: _selectedMornyeService,
-                artworkUrl: art,
-              ));
-            }
-
-            if (!seenAlbums.contains(album)) {
-              seenAlbums.add(album);
-              items.add(MornyeCatalogItem(
-                title: album,
-                artist: artist,
-                album: album,
-                subtitle: '$artist • Album via $_selectedMornyeService',
-                type: 'album',
-                service: _selectedMornyeService,
-                artworkUrl: art,
-                collectionId: collectionId,
-              ));
-            }
           }
         }
         setState(() {
@@ -2116,59 +2017,38 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     ),
                   ),
                   const SizedBox(height: 14),
-                  Text('${visibleExts.length} extensions', style: const TextStyle(fontSize: 12, color: Colors.grey, fontWeight: FontWeight.bold)),
-                  const SizedBox(height: 10),
                   ...visibleExts.map((ext) => Container(
                     margin: const EdgeInsets.symmetric(vertical: 6),
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(color: const Color(0xFF12121A), borderRadius: BorderRadius.circular(16)),
                     child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
                         Container(
                           width: 40,
                           height: 40,
                           decoration: BoxDecoration(color: const Color(0xFF1C1C28), borderRadius: BorderRadius.circular(12)),
-                          child: Icon(ext.category == 'Download' ? Icons.download_rounded : (ext.category == 'Metadata' ? Icons.link_rounded : Icons.handyman_rounded), color: Theme.of(context).colorScheme.primary, size: 20),
+                          child: Icon(Icons.extension_rounded, color: Theme.of(context).colorScheme.primary, size: 20),
                         ),
                         const SizedBox(width: 12),
                         Expanded(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Row(
-                                children: [
-                                  Text(ext.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                  const SizedBox(width: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                                    decoration: BoxDecoration(color: Colors.white10, borderRadius: BorderRadius.circular(6)),
-                                    child: Text(ext.version, style: const TextStyle(fontSize: 9, color: Colors.grey)),
-                                  ),
-                                ],
-                              ),
-                              const SizedBox(height: 4),
-                              Text(ext.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white54)),
+                              Text(ext.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                              const SizedBox(height: 2),
+                              Text(ext.description, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white54)),
                             ],
                           ),
                         ),
-                        const SizedBox(width: 8),
                         ElevatedButton(
                           style: ElevatedButton.styleFrom(
                             backgroundColor: ext.isInstalled ? const Color(0xFF1E1E28) : Theme.of(context).colorScheme.primary,
-                            foregroundColor: ext.isInstalled ? Colors.white70 : Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                           ),
                           onPressed: () {
-                            setRepoState(() {
-                              ext.isInstalled = !ext.isInstalled;
-                              ext.isEnabled = ext.isInstalled;
-                            });
+                            setRepoState(() => ext.isInstalled = !ext.isInstalled);
                             setState(() {});
-                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('${ext.name} ${ext.isInstalled ? "Installed" : "Uninstalled"}')));
                           },
-                          child: Text(ext.isInstalled ? '✓ Installed' : 'Install', style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                          child: Text(ext.isInstalled ? 'Installed' : 'Install', style: const TextStyle(fontSize: 11)),
                         ),
                       ],
                     ),
@@ -2190,6 +2070,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           songsCount: _songs.length,
           artistsCount: artistGroups.length,
           albumsCount: _songs.map((s) => s.album).toSet().length,
+          totalSeconds: _totalListenSeconds,
         ),
       ),
     );
@@ -2210,13 +2091,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           alignment: Alignment.centerRight,
           padding: const EdgeInsets.only(right: 20),
           decoration: BoxDecoration(color: Theme.of(context).colorScheme.primary, borderRadius: BorderRadius.circular(12)),
-          child: const Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.playlist_add_rounded, color: Colors.white, size: 22),
-              Text('Play Next', style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold)),
-            ],
-          ),
+          child: const Icon(Icons.playlist_add_rounded, color: Colors.white, size: 22),
         ),
         confirmDismiss: (direction) async {
           setState(() => _playNextQueue.add(song));
@@ -2234,7 +2109,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           child: Padding(
             padding: const EdgeInsets.fromLTRB(8, 6, 2, 6),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 _buildCoverArt(song, 48, 8),
                 const SizedBox(width: 12),
@@ -2262,7 +2136,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                       ),
                       const SizedBox(height: 1),
                       Text(
-                        '${song.album} • ${song.addedDate}',
+                        '${song.album} • Plays: ${song.playCount}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: const TextStyle(fontSize: 10.5, color: Colors.white38),
@@ -2273,16 +2147,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 const SizedBox(width: 6),
                 Column(
                   mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    Text(
-                      _formatDurationPadded(song.duration),
-                      style: const TextStyle(fontSize: 11, color: Colors.white70, fontWeight: FontWeight.w500),
-                    ),
+                    Text(_formatDurationPadded(song.duration), style: const TextStyle(fontSize: 11, color: Colors.white70)),
                     const SizedBox(height: 3),
                     GestureDetector(
                       onTap: () {
                         setState(() => song.isFavorite = !song.isFavorite);
+                        _saveStateCache();
                         if (onStateUpdate != null) onStateUpdate();
                       },
                       child: Icon(
@@ -2293,14 +2164,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     ),
                   ],
                 ),
-                const SizedBox(width: 10),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _showActionMenu(song),
-                  child: const Padding(
-                    padding: EdgeInsets.fromLTRB(2, 6, 8, 6),
-                    child: Icon(Icons.more_vert_rounded, color: Colors.white54, size: 19),
-                  ),
+                const SizedBox(width: 6),
+                IconButton(
+                  icon: const Icon(Icons.more_vert_rounded, color: Colors.white54, size: 19),
+                  onPressed: () => _showActionMenu(song),
                 ),
               ],
             ),
@@ -2424,7 +2291,10 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         onShowEqualizer: _showEqualizerSheet,
         onShowSleepTimer: _showSleepTimerDialog,
         onToggleFavorite: () {
-          if (_currentSong != null) setState(() => _currentSong!.isFavorite = !_currentSong!.isFavorite);
+          if (_currentSong != null) {
+            setState(() => _currentSong!.isFavorite = !_currentSong!.isFavorite);
+            _saveStateCache();
+          }
         },
         onRefreshLyrics: () {
           if (_currentSong != null) {
@@ -2459,6 +2329,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
           replayGain: _replayGain,
           connectedDacName: _connectedDacName,
           onOpenExtensionRepo: _openExtensionRepoScreen,
+          onExportBackup: _exportBackup,
+          onImportBackup: _importBackup,
           onUsbDacChanged: _toggleUsbDacMode,
           onGaplessChanged: (v) => setState(() => _gaplessPlayback = v),
           onNotificationChanged: (v) => setState(() => _mediaNotificationEnabled = v),
@@ -2484,142 +2356,61 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       totalSeconds += s.duration.inSeconds;
     }
     final totalMin = (totalSeconds ~/ 60).clamp(1, 999);
-    bool showAlbumsExpanded = false;
     List<AudioTrack> visibleArtistTracks = List.from(artistTracks);
 
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => StatefulBuilder(
-          builder: (context, setArtistScreenState) => Scaffold(
-            appBar: AppBar(
-              backgroundColor: Colors.transparent,
-              actions: [
-                IconButton(
-                  icon: const Icon(Icons.shuffle_rounded),
-                  onPressed: () {
-                    final shuffled = List<AudioTrack>.from(artistTracks)..shuffle();
-                    if (shuffled.isNotEmpty) _playSong(shuffled.first);
-                  },
-                ),
-              ],
-            ),
-            body: Stack(
-              children: [
-                ListView(
-                  padding: const EdgeInsets.fromLTRB(0, 8, 0, 130),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 20),
-                      child: Row(
-                        children: [
-                          CircleAvatar(
-                            radius: 54,
-                            backgroundColor: Colors.deepPurple.withOpacity(0.3),
-                            backgroundImage: firstArt != null ? MemoryImage(firstArt) : null,
-                            child: firstArt == null ? const Icon(Icons.person_rounded, size: 50, color: Colors.white38) : null,
-                          ),
-                          const SizedBox(width: 18),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(artistName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
-                                const SizedBox(height: 4),
-                                Text('${artistTracks.length} Tracks • ${totalMin}m', style: const TextStyle(color: Colors.white54, fontSize: 13)),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
+        builder: (context) => Scaffold(
+          appBar: AppBar(
+            backgroundColor: Colors.transparent,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.shuffle_rounded),
+                onPressed: () {
+                  final shuffled = List<AudioTrack>.from(artistTracks)..shuffle();
+                  if (shuffled.isNotEmpty) _playSong(shuffled.first);
+                },
+              ),
+            ],
+          ),
+          body: Stack(
+            children: [
+              ListView(
+                padding: const EdgeInsets.fromLTRB(0, 8, 0, 130),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 20),
+                    child: Row(
                       children: [
-                        _artistPillButton(Icons.shuffle_rounded, () {
-                          final shuffled = List<AudioTrack>.from(artistTracks)..shuffle();
-                          if (shuffled.isNotEmpty) _playSong(shuffled.first);
-                        }),
-                        const SizedBox(width: 10),
-                        _artistPillButton(Icons.play_arrow_outlined, () {
-                          if (artistTracks.isNotEmpty) _playSong(artistTracks.first);
-                        }),
-                        const SizedBox(width: 10),
-                        _artistPillButton(Icons.playlist_add_rounded, () {
-                          setState(() => _playNextQueue.addAll(artistTracks));
-                          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Queued ${artistTracks.length} tracks')));
-                        }),
-                      ],
-                    ),
-                    const SizedBox(height: 18),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 14),
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(14),
-                        onTap: () => setArtistScreenState(() => showAlbumsExpanded = !showAlbumsExpanded),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                          decoration: BoxDecoration(color: const Color(0xFF14141C), borderRadius: BorderRadius.circular(14)),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        CircleAvatar(
+                          radius: 54,
+                          backgroundColor: Colors.deepPurple.withOpacity(0.3),
+                          backgroundImage: firstArt != null ? MemoryImage(firstArt) : null,
+                          child: firstArt == null ? const Icon(Icons.person_rounded, size: 50, color: Colors.white38) : null,
+                        ),
+                        const SizedBox(width: 18),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Albums: ${albumsMap.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                              Icon(showAlbumsExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded),
+                              Text(artistName, style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+                              const SizedBox(height: 4),
+                              Text('${artistTracks.length} Tracks • ${totalMin}m', style: const TextStyle(color: Colors.white54, fontSize: 13)),
                             ],
                           ),
                         ),
-                      ),
+                      ],
                     ),
-                    if (showAlbumsExpanded)
-                      SizedBox(
-                        height: 140,
-                        child: ListView(
-                          scrollDirection: Axis.horizontal,
-                          padding: const EdgeInsets.fromLTRB(16, 10, 16, 4),
-                          children: albumsMap.entries.map((entry) => GestureDetector(
-                            onTap: () => _showFilteredListScreen('Album: ${entry.key}', entry.value),
-                            child: Container(
-                              width: 100,
-                              margin: const EdgeInsets.only(right: 12),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  _buildCoverArt(entry.value.first, 90, 8),
-                                  const SizedBox(height: 4),
-                                  Text(entry.key, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-                                  Text('${entry.value.length} tracks', style: const TextStyle(fontSize: 9.5, color: Colors.grey)),
-                                ],
-                              ),
-                            ),
-                          )).toList(),
-                        ),
-                      ),
-                    const SizedBox(height: 10),
-                    ...visibleArtistTracks.map((song) => _buildNamidaTrackTile(song, onStateUpdate: () => setArtistScreenState(() {}))),
-                  ],
-                ),
-                Positioned(left: 10, right: 10, bottom: 12, child: _buildReactiveMiniPlayer()),
-              ],
-            ),
+                  ),
+                  const SizedBox(height: 16),
+                  ...visibleArtistTracks.map((song) => _buildNamidaTrackTile(song)),
+                ],
+              ),
+              Positioned(left: 10, right: 10, bottom: 12, child: _buildReactiveMiniPlayer()),
+            ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _artistPillButton(IconData icon, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: 52,
-        height: 38,
-        decoration: BoxDecoration(
-          color: const Color(0xFF15151E),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: Colors.white10),
-        ),
-        child: Icon(icon, color: Colors.white70, size: 20),
       ),
     );
   }
@@ -2666,8 +2457,8 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 setState(() {
                   _customPlaylists.add(CustomPlaylist(name: nameCtrl.text.trim(), tracks: []));
                 });
+                _saveStateCache();
                 Navigator.pop(c);
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Created playlist "${nameCtrl.text.trim()}"')));
               }
             },
             child: const Text('Create'),
@@ -2683,58 +2474,42 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
 
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setModalState) => AlertDialog(
-          backgroundColor: const Color(0xFF14141F),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Text('Edit Profile & Photo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Center(
-                  child: CircleAvatar(
-                    radius: 38,
-                    backgroundColor: Theme.of(context).colorScheme.primary,
-                    backgroundImage: (pathCtrl.text.isNotEmpty && File(pathCtrl.text).existsSync())
-                        ? FileImage(File(pathCtrl.text))
-                        : null,
-                    child: (pathCtrl.text.isEmpty || !File(pathCtrl.text).existsSync())
-                        ? Text(nameCtrl.text.isNotEmpty ? nameCtrl.text[0].toUpperCase() : 'P', style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold))
-                        : null,
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: nameCtrl,
-                  onChanged: (_) => setModalState(() {}),
-                  decoration: const InputDecoration(labelText: 'Your Name', hintText: 'Enter your name...'),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: pathCtrl,
-                  onChanged: (_) => setModalState(() {}),
-                  decoration: const InputDecoration(labelText: 'Custom Image Path', hintText: '/storage/emulated/0/Download/photo.jpg'),
-                ),
-              ],
-            ),
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF14141F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('Edit Profile & Photo', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Your Name'),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: pathCtrl,
+                decoration: const InputDecoration(labelText: 'Custom Image Path'),
+              ),
+            ],
           ),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
-              onPressed: () {
-                setState(() {
-                  if (nameCtrl.text.trim().isNotEmpty) _userName = nameCtrl.text.trim();
-                  _userPhotoPath = pathCtrl.text.trim().isNotEmpty ? pathCtrl.text.trim() : null;
-                });
-                Navigator.pop(context);
-              },
-              child: const Text('Save Profile'),
-            ),
-          ],
         ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
+            onPressed: () {
+              setState(() {
+                if (nameCtrl.text.trim().isNotEmpty) _userName = nameCtrl.text.trim();
+                _userPhotoPath = pathCtrl.text.trim().isNotEmpty ? pathCtrl.text.trim() : null;
+              });
+              _saveStateCache();
+              Navigator.pop(context);
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
   }
@@ -2860,6 +2635,13 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                   child: _buildHomeCard(_songs.isNotEmpty ? _songs.first.albumArt : null, 'Recommended', '${_songs.length} Local Tracks'),
                 ),
                 GestureDetector(
+                  onTap: () {
+                    final heavyRotation = List<AudioTrack>.from(_songs)..sort((a, b) => b.playCount.compareTo(a.playCount));
+                    if (heavyRotation.isNotEmpty) _playSong(heavyRotation.first);
+                  },
+                  child: _buildHomeCard(null, 'Heavy Rotation', 'Most Played Tracks'),
+                ),
+                GestureDetector(
                   onTap: _shufflePlay,
                   child: _buildHomeCard(null, 'Infinite Mix', 'Dynamic Audio Flow'),
                 ),
@@ -2867,11 +2649,11 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             ),
           ),
           const SizedBox(height: 24),
-          const Row(
+          Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-              Icon(Icons.chevron_right_rounded, color: Colors.grey),
+              const Text('Recent Listens', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              IconButton(icon: const Icon(Icons.history, color: Colors.grey), onPressed: () => _showFilteredListScreen('History', _historyTracks)),
             ],
           ),
           const SizedBox(height: 12),
@@ -2882,9 +2664,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               height: 140,
               child: ListView.builder(
                 scrollDirection: Axis.horizontal,
-                itemCount: _songs.length > 8 ? 8 : _songs.length,
+                itemCount: _historyTracks.length > 8 ? 8 : _historyTracks.length,
                 itemBuilder: (context, index) {
-                  final song = _songs[index];
+                  final song = _historyTracks[index];
                   return GestureDetector(
                     onTap: () => _playSong(song),
                     child: Container(
@@ -2896,7 +2678,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                           _buildCoverArt(song, 100, 12),
                           const SizedBox(height: 6),
                           Text(song.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                          const Text('an hour ago', style: TextStyle(fontSize: 10, color: Colors.grey)),
+                          Text(song.artist, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 10, color: Colors.grey)),
                         ],
                       ),
                     ),
@@ -2911,34 +2693,48 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
       _hasPermission
           ? (_isScanning
               ? Center(child: CircularProgressIndicator(color: Theme.of(context).colorScheme.primary))
-              : Column(
+              : Stack(
                   children: [
-                    Padding(
-                      padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
-                      child: Row(
-                        children: [
-                          IconButton(icon: const Icon(Icons.shuffle_rounded, size: 20), onPressed: _shufflePlay),
-                          IconButton(icon: const Icon(Icons.play_arrow_rounded, size: 22), onPressed: () { if (_filteredSongs.isNotEmpty) _playSong(_filteredSongs.first); }),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                            decoration: BoxDecoration(color: const Color(0xFF14141E), borderRadius: BorderRadius.circular(16)),
-                            child: Text('${_songs.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                    Column(
+                      children: [
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(14, 6, 14, 6),
+                          child: Row(
+                            children: [
+                              IconButton(icon: const Icon(Icons.shuffle_rounded, size: 20), onPressed: _shufflePlay),
+                              IconButton(icon: const Icon(Icons.play_arrow_rounded, size: 22), onPressed: () { if (_filteredSongs.isNotEmpty) _playSong(_filteredSongs.first); }),
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                decoration: BoxDecoration(color: const Color(0xFF14141E), borderRadius: BorderRadius.circular(16)),
+                                child: Text('${_songs.length}', style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                              ),
+                              const Spacer(),
+                              IconButton(
+                                icon: const Icon(Icons.sort_rounded, size: 20),
+                                onPressed: () {
+                                  setState(() => _filteredSongs = _filteredSongs.reversed.toList());
+                                },
+                              ),
+                            ],
                           ),
-                          const Spacer(),
-                          IconButton(
-                            icon: const Icon(Icons.sort_rounded, size: 20),
-                            onPressed: () {
-                              setState(() => _filteredSongs = _filteredSongs.reversed.toList());
-                            },
+                        ),
+                        Expanded(
+                          child: ListView.builder(
+                            controller: _trackListScrollController,
+                            padding: const EdgeInsets.only(bottom: 95),
+                            itemCount: _filteredSongs.length,
+                            itemBuilder: (context, index) => _buildNamidaTrackTile(_filteredSongs[index]),
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                    Expanded(
-                      child: ListView.builder(
-                        padding: const EdgeInsets.only(bottom: 95),
-                        itemCount: _filteredSongs.length,
-                        itemBuilder: (context, index) => _buildNamidaTrackTile(_filteredSongs[index]),
+                    Positioned(
+                      right: 16,
+                      bottom: 92,
+                      child: FloatingActionButton.small(
+                        backgroundColor: Theme.of(context).colorScheme.primary,
+                        onPressed: _locateActivePlayingTrack,
+                        child: const Icon(Icons.my_location_rounded, color: Colors.white, size: 20),
                       ),
                     ),
                   ],
@@ -2997,8 +2793,9 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 _showFilteredListScreen('Listening History', _historyTracks);
               }),
               const SizedBox(width: 12),
-              _buildPlaylistStatCard('Most Played', '${_songs.length}', Icons.trending_up, () {
-                _showFilteredListScreen('Most Played Tracks', _songs);
+              _buildPlaylistStatCard('Most Played', '${_songs.where((s) => s.playCount > 0).length}', Icons.trending_up, () {
+                final topTracks = List<AudioTrack>.from(_songs)..sort((a, b) => b.playCount.compareTo(a.playCount));
+                _showFilteredListScreen('Most Played Tracks', topTracks);
               }),
             ],
           ),
@@ -3014,8 +2811,19 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               }),
             ],
           ),
+          const SizedBox(height: 18),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            leading: Icon(Icons.auto_awesome_rounded, color: Theme.of(context).colorScheme.primary),
+            title: const Text('Forgotten Gems', style: TextStyle(fontWeight: FontWeight.bold)),
+            subtitle: const Text('Tracks you have not listened to yet', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            onTap: () {
+              final unplayed = _songs.where((s) => s.playCount == 0).toList();
+              _showFilteredListScreen('Forgotten Gems', unplayed);
+            },
+          ),
           if (_customPlaylists.isNotEmpty) ...[
-            const SizedBox(height: 24),
+            const SizedBox(height: 16),
             const Text('Your Playlists', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             ..._customPlaylists.map((pl) => Card(
@@ -3112,25 +2920,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                     ),
                   ),
                 ),
-                const SizedBox(height: 12),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: ['All', 'Songs', 'Albums', 'Artists'].map((filter) {
-                      final isSel = _mornyeActiveFilter == filter;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: ChoiceChip(
-                          label: Text(filter, style: TextStyle(fontSize: 11.5, color: isSel ? Colors.white : Colors.white70)),
-                          selected: isSel,
-                          selectedColor: Theme.of(context).colorScheme.primary,
-                          backgroundColor: const Color(0xFF0A0A0E),
-                          onSelected: (val) => setState(() => _mornyeActiveFilter = filter),
-                        ),
-                      );
-                    }).toList(),
-                  ),
-                ),
               ],
             ),
           ),
@@ -3141,66 +2930,24 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               child: Center(child: CircularProgressIndicator(color: Theme.of(context).colorScheme.primary)),
             )
           else if (_mornyeResults.isNotEmpty) ...[
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                const Text('Search Results', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                Text(_mornyeAudioQuality, style: TextStyle(fontSize: 10.5, color: Theme.of(context).colorScheme.primary)),
-              ],
-            ),
+            const Text('Search Results', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
-            ..._mornyeResults
-                .where((item) => _mornyeActiveFilter == 'All' || item.type.toLowerCase() == _mornyeActiveFilter.toLowerCase().replaceAll('s', ''))
-                .map((item) {
+            ..._mornyeResults.map((item) {
               final isDownloading = _downloadingTitles.contains(item.title);
               return Container(
                 margin: const EdgeInsets.symmetric(vertical: 5),
                 decoration: BoxDecoration(color: const Color(0xFF12121A), borderRadius: BorderRadius.circular(14)),
                 child: ListTile(
-                  leading: item.artworkUrl != null
-                      ? ClipRRect(
-                          borderRadius: BorderRadius.circular(item.type == 'artist' ? 24 : 8),
-                          child: Image.network(
-                            item.artworkUrl!,
-                            width: 44,
-                            height: 44,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Icon(
-                              item.type == 'artist' ? Icons.person_rounded : (item.type == 'album' ? Icons.album_rounded : Icons.music_note_rounded),
-                              color: Theme.of(context).colorScheme.primary,
-                            ),
-                          ),
-                        )
-                      : Icon(
-                          item.type == 'artist' ? Icons.person_rounded : (item.type == 'album' ? Icons.album_rounded : Icons.music_note_rounded),
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
+                  leading: const Icon(Icons.music_note_rounded, color: Colors.white70),
                   title: Text(item.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.bold)),
                   subtitle: Text(item.subtitle, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 11, color: Colors.white60)),
-                  trailing: item.type == 'song'
-                      ? (isDownloading
-                          ? SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.2, color: Theme.of(context).colorScheme.primary))
-                          : IconButton(
-                              icon: Icon(Icons.download_rounded, color: Theme.of(context).colorScheme.primary),
-                              onPressed: () => _downloadMornyeTrack(item),
-                            ))
-                      : (item.type == 'album'
-                          ? IconButton(
-                              icon: Icon(Icons.download_for_offline_rounded, color: Theme.of(context).colorScheme.primary),
-                              tooltip: 'Download Complete Album',
-                              onPressed: () => _batchDownloadAlbum(item),
-                            )
-                          : const Icon(Icons.chevron_right_rounded, color: Colors.grey)),
-                  onTap: () {
-                    if (item.type == 'song') {
-                      _downloadMornyeTrack(item);
-                    } else if (item.type == 'album') {
-                      _batchDownloadAlbum(item);
-                    } else {
-                      _mornyeSearchController.text = item.title;
-                      _searchMornyeCatalog(item.title);
-                    }
-                  },
+                  trailing: isDownloading
+                      ? SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.2, color: Theme.of(context).colorScheme.primary))
+                      : IconButton(
+                          icon: Icon(Icons.download_rounded, color: Theme.of(context).colorScheme.primary),
+                          onPressed: () => _downloadMornyeTrack(item),
+                        ),
+                  onTap: () => _downloadMornyeTrack(item),
                 ),
               );
             }),
@@ -3224,7 +2971,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 controller: _searchController,
                 autofocus: true,
                 onChanged: _filterSongs,
-                decoration: const InputDecoration(hintText: 'Search tracks, artists, albums...', border: InputBorder.none, hintStyle: TextStyle(color: Colors.grey)),
+                decoration: const InputDecoration(hintText: 'Search tracks, artists, albums...', border: InputBorder.none),
                 style: const TextStyle(color: Colors.white, fontSize: 16),
               )
             : Text(tabTitles[_selectedIndex], style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 1.1)),
@@ -3257,35 +3004,15 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
                 children: [
                   const Text('Nami', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white)),
                   const SizedBox(height: 4),
-                  Text('Hi-Res Lossless Player • $_userName', style: const TextStyle(color: Colors.white54, fontSize: 12)),
+                  Text('Lossless Player • $_userName', style: const TextStyle(color: Colors.white54, fontSize: 12)),
                 ],
               ),
             ),
-            ListTile(
-              leading: const Icon(Icons.home_outlined),
-              title: const Text('Home'),
-              onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 0); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.library_music_outlined),
-              title: const Text('Tracks'),
-              onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 1); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.person_outline_rounded),
-              title: const Text('Artists'),
-              onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 2); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.playlist_play_rounded),
-              title: const Text('Playlists'),
-              onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 3); },
-            ),
-            ListTile(
-              leading: const Icon(Icons.extension_outlined),
-              title: const Text('Mornye Catalog'),
-              onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 4); },
-            ),
+            ListTile(leading: const Icon(Icons.home_outlined), title: const Text('Home'), onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 0); }),
+            ListTile(leading: const Icon(Icons.library_music_outlined), title: const Text('Tracks'), onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 1); }),
+            ListTile(leading: const Icon(Icons.person_outline_rounded), title: const Text('Artists'), onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 2); }),
+            ListTile(leading: const Icon(Icons.playlist_play_rounded), title: const Text('Playlists'), onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 3); }),
+            ListTile(leading: const Icon(Icons.extension_outlined), title: const Text('Mornye Catalog'), onTap: () { Navigator.pop(context); setState(() => _selectedIndex = 4); }),
             const Divider(color: Colors.white10),
             ListTile(
               leading: Icon(Icons.folder_open_rounded, color: Theme.of(context).colorScheme.primary),
@@ -3312,11 +3039,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
               title: const Text('Listening Statistics'),
               onTap: () { Navigator.pop(context); _openStatisticsScreen(); },
             ),
-            ListTile(
-              leading: const Icon(Icons.settings_outlined),
-              title: const Text('Settings'),
-              onTap: () { Navigator.pop(context); _openSettings(); },
-            ),
+            ListTile(leading: const Icon(Icons.settings_outlined), title: const Text('Settings'), onTap: () { Navigator.pop(context); _openSettings(); }),
           ],
         ),
       ),
@@ -3352,6 +3075,8 @@ class MainSettingsScreen extends StatefulWidget {
   final bool replayGain;
   final String connectedDacName;
   final VoidCallback onOpenExtensionRepo;
+  final VoidCallback onExportBackup;
+  final VoidCallback onImportBackup;
   final ValueChanged<bool> onUsbDacChanged;
   final ValueChanged<bool> onGaplessChanged;
   final ValueChanged<bool> onNotificationChanged;
@@ -3372,6 +3097,8 @@ class MainSettingsScreen extends StatefulWidget {
     required this.replayGain,
     required this.connectedDacName,
     required this.onOpenExtensionRepo,
+    required this.onExportBackup,
+    required this.onImportBackup,
     required this.onUsbDacChanged,
     required this.onGaplessChanged,
     required this.onNotificationChanged,
@@ -3478,9 +3205,22 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
             onTap: _showColorPicker,
           ),
           const Divider(color: Colors.white10),
+          SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Auto-Coloring From Artwork'), value: _autoColor, activeColor: themeColor, onChanged: (v) { setState(() => _autoColor = v); widget.onAutoColoringChanged(v); }),
           SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Use Pitch Black (AMOLED)'), value: _pitchBlack, activeColor: themeColor, onChanged: (v) { setState(() => _pitchBlack = v); widget.onPitchBlackChanged(v); }),
           SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('USB DAC Exclusive Routing'), value: _usbDac, activeColor: themeColor, onChanged: (v) { setState(() => _usbDac = v); widget.onUsbDacChanged(v); }),
-          SwitchListTile(contentPadding: EdgeInsets.zero, title: const Text('Gapless Playback'), value: _gapless, activeColor: themeColor, onChanged: (v) { setState(() => _gapless = v); widget.onGaplessChanged(v); }),
+          const Divider(color: Colors.white10),
+          ListTile(
+            leading: Icon(Icons.backup_rounded, color: themeColor),
+            title: const Text('Backup Library & Playlists'),
+            subtitle: const Text('Export JSON to /Download/nami_backup.json', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            onTap: widget.onExportBackup,
+          ),
+          ListTile(
+            leading: Icon(Icons.restore_rounded, color: themeColor),
+            title: const Text('Restore Backup'),
+            subtitle: const Text('Import /Download/nami_backup.json', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            onTap: widget.onImportBackup,
+          ),
           const SizedBox(height: 16),
           ListTile(leading: Icon(Icons.refresh_rounded, color: themeColor), title: const Text('Rescan Music Library'), onTap: () { widget.onRescan(); Navigator.pop(context); }),
         ],
@@ -3489,29 +3229,57 @@ class _MainSettingsScreenState extends State<MainSettingsScreen> {
   }
 }
 
-class StatisticsScreen extends StatefulWidget {
-  final int songsCount, artistsCount, albumsCount;
-  const StatisticsScreen({super.key, required this.songsCount, required this.artistsCount, required this.albumsCount});
-  @override
-  State<StatisticsScreen> createState() => _StatisticsScreenState();
-}
+class StatisticsScreen extends StatelessWidget {
+  final int songsCount, artistsCount, albumsCount, totalSeconds;
+  const StatisticsScreen({super.key, required this.songsCount, required this.artistsCount, required this.albumsCount, required this.totalSeconds});
 
-class _StatisticsScreenState extends State<StatisticsScreen> {
   @override
   Widget build(BuildContext context) {
+    final primary = Theme.of(context).colorScheme.primary;
+    final hours = totalSeconds ~/ 3600;
+    final mins = (totalSeconds % 3600) ~/ 60;
+
     return Scaffold(
       appBar: AppBar(backgroundColor: Colors.transparent, title: const Text('Statistics', style: TextStyle(fontWeight: FontWeight.bold))),
-      body: ListView(padding: const EdgeInsets.all(16), children: [
-        Container(padding: const EdgeInsets.all(16), decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(20)), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text('Library Overview', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Theme.of(context).colorScheme.primary)),
-          const SizedBox(height: 14),
-          Row(mainAxisAlignment: MainAxisAlignment.spaceAround, children: [
-            Column(children: [Icon(Icons.music_note, color: Theme.of(context).colorScheme.primary), const SizedBox(height: 4), Text('${widget.songsCount}', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Tracks', style: TextStyle(fontSize: 10, color: Colors.grey))]),
-            Column(children: [Icon(Icons.album, color: Theme.of(context).colorScheme.primary), const SizedBox(height: 4), Text('${widget.albumsCount}', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Albums', style: TextStyle(fontSize: 10, color: Colors.grey))]),
-            Column(children: [Icon(Icons.person, color: Theme.of(context).colorScheme.primary), const SizedBox(height: 4), Text('${widget.artistsCount}', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Artists', style: TextStyle(fontSize: 10, color: Colors.grey))]),
-          ]),
-        ])),
-      ]),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(20)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Library Overview', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: primary)),
+                const SizedBox(height: 14),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceAround,
+                  children: [
+                    Column(children: [Icon(Icons.music_note, color: primary), const SizedBox(height: 4), Text('$songsCount', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Tracks', style: TextStyle(fontSize: 10, color: Colors.grey))]),
+                    Column(children: [Icon(Icons.album, color: primary), const SizedBox(height: 4), Text('$albumsCount', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Albums', style: TextStyle(fontSize: 10, color: Colors.grey))]),
+                    Column(children: [Icon(Icons.person, color: primary), const SizedBox(height: 4), Text('$artistsCount', style: const TextStyle(fontWeight: FontWeight.bold)), const Text('Artists', style: TextStyle(fontSize: 10, color: Colors.grey))]),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(color: const Color(0xFF14141F), borderRadius: BorderRadius.circular(20)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Real Playback Telemetry', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: primary)),
+                const SizedBox(height: 14),
+                Text('Total Time Listened: ${hours}h ${mins}m', style: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                const Text('Bit-Perfect PCM Audio Output Active', style: TextStyle(fontSize: 12, color: Colors.white70)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -3526,7 +3294,27 @@ class NowPlayingModal extends StatefulWidget {
   final bool sleepAfterTrack;
   final VoidCallback onShowPath, onShowEqualizer, onShowSleepTimer, onToggleFavorite, onRefreshLyrics, onEditTags, onManualSearchLyrics, onPlayPause, onNext, onPrevious;
 
-  const NowPlayingModal({super.key, required this.audioPlayer, required this.currentSongNotifier, required this.playNextQueue, required this.totalTrackCount, required this.currentIndex, required this.extensions, required this.sleepMinutesRemaining, required this.sleepAfterTrack, required this.onShowPath, required this.onShowEqualizer, required this.onShowSleepTimer, required this.onToggleFavorite, required this.onRefreshLyrics, required this.onEditTags, required this.onManualSearchLyrics, required this.onPlayPause, required this.onNext, required this.onPrevious});
+  const NowPlayingModal({
+    super.key,
+    required this.audioPlayer,
+    required this.currentSongNotifier,
+    required this.playNextQueue,
+    required this.totalTrackCount,
+    required this.currentIndex,
+    required this.extensions,
+    required this.sleepMinutesRemaining,
+    required this.sleepAfterTrack,
+    required this.onShowPath,
+    required this.onShowEqualizer,
+    required this.onShowSleepTimer,
+    required this.onToggleFavorite,
+    required this.onRefreshLyrics,
+    required this.onEditTags,
+    required this.onManualSearchLyrics,
+    required this.onPlayPause,
+    required this.onNext,
+    required this.onPrevious,
+  });
 
   @override
   State<NowPlayingModal> createState() => _NowPlayingModalState();
@@ -3535,6 +3323,8 @@ class NowPlayingModal extends StatefulWidget {
 class _NowPlayingModalState extends State<NowPlayingModal> {
   int _viewMode = 0;
   bool _isLooping = false;
+  Duration? _loopA;
+  Duration? _loopB;
   final ScrollController _lyricsScrollCtrl = ScrollController();
   int _lastScrolledLyricIndex = -1;
 
@@ -3553,23 +3343,53 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
     }
   }
 
+  void _seekRelative(int seconds) {
+    final cur = widget.audioPlayer.position;
+    final target = cur + Duration(seconds: seconds);
+    widget.audioPlayer.seek(target < Duration.zero ? Duration.zero : target);
+  }
+
   void _showQueueBottomSheet(BuildContext context) {
-    showModalBottomSheet(context: context, backgroundColor: const Color(0xFF14141F), shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))), builder: (c) => Padding(
-      padding: const EdgeInsets.all(20),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        const Text('Playback Queue & Next Up', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-        const SizedBox(height: 12),
-        if (widget.playNextQueue.isEmpty) const Text('No tracks in play-next queue.', style: TextStyle(color: Colors.grey, fontSize: 12))
-        else SizedBox(height: 220, child: ListView.builder(itemCount: widget.playNextQueue.length, itemBuilder: (ctx, i) {
-          final qTrack = widget.playNextQueue[i];
-          return ListTile(contentPadding: EdgeInsets.zero, title: Text(qTrack.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)), subtitle: Text(qTrack.artist, style: const TextStyle(fontSize: 11, color: Colors.grey)));
-        })),
-      ]),
-    ));
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF14141F),
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(24))),
+      builder: (c) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Playback Queue & Next Up', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 12),
+            if (widget.playNextQueue.isEmpty)
+              const Text('No tracks in play-next queue.', style: TextStyle(color: Colors.grey, fontSize: 12))
+            else
+              SizedBox(
+                height: 220,
+                child: ListView.builder(
+                  itemCount: widget.playNextQueue.length,
+                  itemBuilder: (ctx, i) {
+                    final qTrack = widget.playNextQueue[i];
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      title: Text(qTrack.title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+                      subtitle: Text(qTrack.artist, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
-  void dispose() { _lyricsScrollCtrl.dispose(); super.dispose(); }
+  void dispose() {
+    _lyricsScrollCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -3586,111 +3406,287 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
           height: MediaQuery.of(context).size.height * 0.94,
           padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
           decoration: const BoxDecoration(color: Color(0xFF07070B), borderRadius: BorderRadius.vertical(top: Radius.circular(32))),
-          child: Column(children: [
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              IconButton(icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white70, size: 28), onPressed: () => Navigator.pop(context)),
-              Expanded(child: Column(children: [
-                Text('${widget.currentIndex}/${widget.totalTrackCount}', style: const TextStyle(fontSize: 11, color: Colors.white54, fontWeight: FontWeight.w600)),
-                const SizedBox(height: 2),
-                Text((song?.album ?? 'ALBUM').toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
-              ])),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(icon: Icon((widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? Icons.bedtime_rounded : Icons.bedtime_outlined, color: (widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? accent : Colors.white70, size: 20), onPressed: widget.onShowSleepTimer),
-                IconButton(icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 22), onPressed: widget.onEditTags),
-              ]),
-            ]),
-            const SizedBox(height: 4),
-            Expanded(child: GestureDetector(
-              onTap: () { setState(() => _viewMode = _viewMode == 0 ? 1 : 0); if (_viewMode == 1) widget.onRefreshLyrics(); },
-              child: Center(child: _viewMode == 0 ? Container(
-                width: artSize, height: artSize,
-                decoration: BoxDecoration(borderRadius: BorderRadius.circular(22), boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.65), blurRadius: 35, spreadRadius: 6)]),
-                child: ClipRRect(borderRadius: BorderRadius.circular(22), child: song?.albumArt != null ? Image.memory(song!.albumArt!, fit: BoxFit.cover) : Container(color: const Color(0xFF14141E), child: const Icon(Icons.album_rounded, size: 100, color: Colors.white24))),
-              ) : StreamBuilder<Duration>(stream: widget.audioPlayer.positionStream, builder: (context, snapshot) {
-                final pos = snapshot.data ?? Duration.zero;
-                final lyrics = song?.parsedLyrics ?? [];
-                if (lyrics.isEmpty) return const Center(child: Text("No synced lyrics found.", style: TextStyle(color: Colors.white60)));
-                int activeIdx = lyrics.lastIndexWhere((l) => l.timestamp <= pos);
-                if (activeIdx < 0) activeIdx = 0;
-                WidgetsBinding.instance.addPostFrameCallback((_) => _autoScrollToActiveLyric(activeIdx));
-                return SizedBox(height: 342, child: ListView.builder(controller: _lyricsScrollCtrl, padding: const EdgeInsets.symmetric(vertical: 152), itemCount: lyrics.length, itemBuilder: (context, idx) {
-                  final isCurrent = idx == activeIdx;
-                  return Container(height: 38, alignment: Alignment.center, child: Text(lyrics[idx].text, maxLines: 1, overflow: TextOverflow.ellipsis, style: TextStyle(fontSize: isCurrent ? 16.5 : 13.5, fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w500, color: isCurrent ? Colors.white : Colors.white24)));
-                }));
-              })),
-            )),
-            const SizedBox(height: 6),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, crossAxisAlignment: CrossAxisAlignment.center, children: [
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(song?.title ?? 'No Track Selected', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: Colors.white)),
-                const SizedBox(height: 3),
-                Text(song?.artist ?? 'Unknown Artist', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500, color: Colors.white70)),
-              ])),
-              IconButton(icon: Icon((song?.isFavorite ?? false) ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: (song?.isFavorite ?? false) ? accent : Colors.white60, size: 24), onPressed: () { widget.onToggleFavorite(); setState(() {}); }),
-            ]),
-            const SizedBox(height: 12),
-            StreamBuilder<Duration>(stream: widget.audioPlayer.positionStream, builder: (context, posSnap) {
-              final pos = posSnap.data ?? Duration.zero;
-              return StreamBuilder<Duration?>(stream: widget.audioPlayer.durationStream, builder: (context, durSnap) {
-                final dur = durSnap.data ?? song?.duration ?? const Duration(minutes: 3, seconds: 45);
-                double maxMs = dur.inMilliseconds.toDouble(); if (maxMs <= 0) maxMs = 1.0;
-                double curMs = pos.inMilliseconds.toDouble().clamp(0.0, maxMs);
-                final prog = curMs / maxMs;
-                return Column(children: [
-                  LayoutBuilder(builder: (ctx, constraints) => GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTapDown: (d) => widget.audioPlayer.seek(Duration(milliseconds: ((d.localPosition.dx / constraints.maxWidth) * maxMs).toInt())),
-                    child: SizedBox(height: 36, width: double.infinity, child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: List.generate(78, (i) => Container(width: 2.2, height: _getWaveformBarHeight(i, song?.title ?? 'Nami'), decoration: BoxDecoration(color: (i / 78) <= prog ? Colors.white : Colors.white24, borderRadius: BorderRadius.circular(1.5)))),
-                    )),
-                  )),
-                  const SizedBox(height: 12),
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                    Text(_formatDurationPadded(pos), style: const TextStyle(color: Colors.white70, fontSize: 11.5)),
-                    Row(mainAxisSize: MainAxisSize.min, children: [
-                      IconButton(icon: const Icon(Icons.skip_previous_outlined, size: 28, color: Colors.white), onPressed: widget.onPrevious),
-                      const SizedBox(width: 8),
-                      GestureDetector(
-                        onTap: widget.onPlayPause,
-                        child: Container(width: 56, height: 56, decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle), child: Icon(widget.audioPlayer.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30, color: Colors.white)),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  IconButton(icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Colors.white70, size: 28), onPressed: () => Navigator.pop(context)),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        Text('${widget.currentIndex}/${widget.totalTrackCount}', style: const TextStyle(fontSize: 11, color: Colors.white54, fontWeight: FontWeight.w600)),
+                        const SizedBox(height: 2),
+                        Text((song?.album ?? 'ALBUM').toUpperCase(), maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.bold, letterSpacing: 0.8)),
+                      ],
+                    ),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          (widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? Icons.bedtime_rounded : Icons.bedtime_outlined,
+                          color: (widget.sleepMinutesRemaining > 0 || widget.sleepAfterTrack) ? accent : Colors.white70,
+                          size: 20,
+                        ),
+                        onPressed: widget.onShowSleepTimer,
                       ),
-                      const SizedBox(width: 8),
-                      IconButton(icon: const Icon(Icons.skip_next_outlined, size: 28, color: Colors.white), onPressed: widget.onNext),
-                    ]),
-                    Text(_formatDurationPadded(dur), style: const TextStyle(color: Colors.white70, fontSize: 11.5)),
-                  ]),
-                ]);
-              });
-            }),
-            const SizedBox(height: 14),
-            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-              InkWell(
-                borderRadius: BorderRadius.circular(12), onTap: widget.onShowPath,
-                child: Padding(padding: const EdgeInsets.symmetric(vertical: 4), child: Row(children: [
-                  Container(width: 28, height: 28, decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle), child: const Icon(Icons.headphones_outlined, size: 14, color: Colors.white70)),
-                  const SizedBox(width: 8),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    RichText(text: TextSpan(children: [
-                      const TextSpan(text: 'Audio ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.white)),
-                      TextSpan(text: '• $ext • $bitrate kb/s • $kHz kHz', style: const TextStyle(fontSize: 10, color: Colors.white70)),
-                    ])),
-                    const SizedBox(height: 1),
-                    const Text('24-bit Hi-Res Lossless', style: TextStyle(fontSize: 9, color: Colors.white38)),
-                  ]),
-                ])),
+                      IconButton(icon: const Icon(Icons.more_vert_rounded, color: Colors.white70, size: 22), onPressed: widget.onEditTags),
+                    ],
+                  ),
+                ],
               ),
-              Row(mainAxisSize: MainAxisSize.min, children: [
-                IconButton(icon: Icon(Icons.repeat_rounded, size: 20, color: _isLooping ? accent : Colors.white70), onPressed: () => setState(() => _isLooping = !_isLooping)),
-                const SizedBox(width: 14),
-                IconButton(icon: const Icon(Icons.tune_rounded, size: 20, color: Colors.white70), onPressed: widget.onShowEqualizer),
-                const SizedBox(width: 14),
-                IconButton(icon: Icon(Icons.lyrics_outlined, size: 20, color: _viewMode == 1 ? accent : Colors.white70), onPressed: () => setState(() => _viewMode = _viewMode == 1 ? 0 : 1)),
-                const SizedBox(width: 14),
-                IconButton(icon: const Icon(Icons.queue_music_rounded, size: 20, color: Colors.white70), onPressed: () => _showQueueBottomSheet(context)),
-              ]),
-            ]),
-          ]),
+              const SizedBox(height: 4),
+              Expanded(
+                child: GestureDetector(
+                  onTap: () {
+                    setState(() => _viewMode = _viewMode == 0 ? 1 : 0);
+                    if (_viewMode == 1) widget.onRefreshLyrics();
+                  },
+                  child: Center(
+                    child: _viewMode == 0
+                        ? Row(
+                            children: [
+                              Expanded(
+                                child: GestureDetector(
+                                  behavior: HitTestBehavior.opaque,
+                                  onDoubleTap: () => _seekRelative(-5),
+                                  child: Container(
+                                    width: artSize,
+                                    height: artSize,
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(22),
+                                      boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.65), blurRadius: 35, spreadRadius: 6)],
+                                    ),
+                                    child: ClipRRect(
+                                      borderRadius: BorderRadius.circular(22),
+                                      child: song?.albumArt != null
+                                          ? Image.memory(song!.albumArt!, fit: BoxFit.cover)
+                                          : Container(color: const Color(0xFF14141E), child: const Icon(Icons.album_rounded, size: 100, color: Colors.white24)),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
+                        : StreamBuilder<Duration>(
+                            stream: widget.audioPlayer.positionStream,
+                            builder: (context, snapshot) {
+                              final pos = snapshot.data ?? Duration.zero;
+                              if (_loopB != null && _loopA != null && pos >= _loopB!) {
+                                widget.audioPlayer.seek(_loopA!);
+                              }
+                              final lyrics = song?.parsedLyrics ?? [];
+                              if (lyrics.isEmpty) return const Center(child: Text("No synced lyrics found.", style: TextStyle(color: Colors.white60)));
+                              int activeIdx = lyrics.lastIndexWhere((l) => l.timestamp <= pos);
+                              if (activeIdx < 0) activeIdx = 0;
+                              WidgetsBinding.instance.addPostFrameCallback((_) => _autoScrollToActiveLyric(activeIdx));
+                              return SizedBox(
+                                height: 342,
+                                child: ListView.builder(
+                                  controller: _lyricsScrollCtrl,
+                                  padding: const EdgeInsets.symmetric(vertical: 152),
+                                  itemCount: lyrics.length,
+                                  itemBuilder: (context, idx) {
+                                    final isCurrent = idx == activeIdx;
+                                    return Container(
+                                      height: 38,
+                                      alignment: Alignment.center,
+                                      child: Text(
+                                        lyrics[idx].text,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        style: TextStyle(
+                                          fontSize: isCurrent ? 16.5 : 13.5,
+                                          fontWeight: isCurrent ? FontWeight.w800 : FontWeight.w500,
+                                          color: isCurrent ? Colors.white : Colors.white24,
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              );
+                            },
+                          ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(song?.title ?? 'No Track Selected', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800, color: Colors.white)),
+                        const SizedBox(height: 3),
+                        Text(song?.artist ?? 'Unknown Artist', maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w500, color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+                  IconButton(
+                    icon: Icon((song?.isFavorite ?? false) ? Icons.favorite_rounded : Icons.favorite_border_rounded, color: (song?.isFavorite ?? false) ? accent : Colors.white60, size: 24),
+                    onPressed: () { widget.onToggleFavorite(); setState(() {}); },
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              StreamBuilder<Duration>(
+                stream: widget.audioPlayer.positionStream,
+                builder: (context, posSnap) {
+                  final pos = posSnap.data ?? Duration.zero;
+                  return StreamBuilder<Duration?>(
+                    stream: widget.audioPlayer.durationStream,
+                    builder: (context, durSnap) {
+                      final dur = durSnap.data ?? song?.duration ?? const Duration(minutes: 3, seconds: 45);
+                      double maxMs = dur.inMilliseconds.toDouble();
+                      if (maxMs <= 0) maxMs = 1.0;
+                      double curMs = pos.inMilliseconds.toDouble().clamp(0.0, maxMs);
+                      final prog = curMs / maxMs;
+                      return Column(
+                        children: [
+                          LayoutBuilder(
+                            builder: (ctx, constraints) => GestureDetector(
+                              behavior: HitTestBehavior.opaque,
+                              onTapDown: (d) => widget.audioPlayer.seek(Duration(milliseconds: ((d.localPosition.dx / constraints.maxWidth) * maxMs).toInt())),
+                              child: SizedBox(
+                                height: 36,
+                                width: double.infinity,
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                  children: List.generate(78, (i) => Container(
+                                    width: 2.2,
+                                    height: _getWaveformBarHeight(i, song?.title ?? 'Nami'),
+                                    decoration: BoxDecoration(color: (i / 78) <= prog ? Colors.white : Colors.white24, borderRadius: BorderRadius.circular(1.5)),
+                                  )),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            children: [
+                              Text(_formatDurationPadded(pos), style: const TextStyle(color: Colors.white70, fontSize: 11.5)),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(icon: const Icon(Icons.skip_previous_outlined, size: 28, color: Colors.white), onPressed: widget.onPrevious),
+                                  const SizedBox(width: 8),
+                                  GestureDetector(
+                                    onTap: widget.onPlayPause,
+                                    child: Container(
+                                      width: 56,
+                                      height: 56,
+                                      decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle),
+                                      child: Icon(widget.audioPlayer.playing ? Icons.pause_rounded : Icons.play_arrow_rounded, size: 30, color: Colors.white),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  IconButton(icon: const Icon(Icons.skip_next_outlined, size: 28, color: Colors.white), onPressed: widget.onNext),
+                                ],
+                              ),
+                              Text(_formatDurationPadded(dur), style: const TextStyle(color: Colors.white70, fontSize: 11.5)),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  );
+                },
+              ),
+              const SizedBox(height: 14),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: widget.onShowPath,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 28,
+                            height: 28,
+                            decoration: BoxDecoration(color: Colors.white.withOpacity(0.08), shape: BoxShape.circle),
+                            child: const Icon(Icons.headphones_outlined, size: 14, color: Colors.white70),
+                          ),
+                          const SizedBox(width: 8),
+                          Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              RichText(
+                                text: TextSpan(
+                                  children: [
+                                    const TextSpan(text: 'Audio ', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 11, color: Colors.white)),
+                                    TextSpan(text: '• $ext • $bitrate kb/s • $kHz kHz', style: const TextStyle(fontSize: 10, color: Colors.white70)),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 1),
+                              const Text('24-bit Hi-Res Lossless', style: TextStyle(fontSize: 9, color: Colors.white38)),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      ActionChip(
+                        label: Text(_loopA == null ? 'A-B' : (_loopB == null ? 'A->' : 'A-B ✓'), style: const TextStyle(fontSize: 10)),
+                        padding: EdgeInsets.zero,
+                        backgroundColor: _loopA != null ? accent.withOpacity(0.3) : Colors.white10,
+                        onPressed: () {
+                          setState(() {
+                            if (_loopA == null) {
+                              _loopA = widget.audioPlayer.position;
+                            } else if (_loopB == null) {
+                              _loopB = widget.audioPlayer.position;
+                            } else {
+                              _loopA = null;
+                              _loopB = null;
+                            }
+                          });
+                        },
+                      ),
+                      const SizedBox(width: 6),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(Icons.repeat_rounded, size: 20, color: _isLooping ? accent : Colors.white70),
+                        onPressed: () {
+                          setState(() => _isLooping = !_isLooping);
+                          widget.audioPlayer.setLoopMode(_isLooping ? LoopMode.one : LoopMode.off);
+                        },
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.tune_rounded, size: 20, color: Colors.white70),
+                        onPressed: widget.onShowEqualizer,
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(Icons.lyrics_outlined, size: 20, color: _viewMode == 1 ? accent : Colors.white70),
+                        onPressed: () {
+                          setState(() => _viewMode = _viewMode == 1 ? 0 : 1);
+                          if (_viewMode == 1) widget.onRefreshLyrics();
+                        },
+                      ),
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.queue_music_rounded, size: 20, color: Colors.white70),
+                        onPressed: () => _showQueueBottomSheet(context),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ],
+          ),
         );
       },
     );

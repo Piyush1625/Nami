@@ -10,6 +10,12 @@ import 'package:audio_session/audio_session.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:http/http.dart' as http;
 
+String _formatDurationPadded(Duration d) {
+  int minutes = d.inMinutes;
+  int seconds = d.inSeconds % 60;
+  return '${minutes.toString().padLeft(2, '0')}:${seconds.toString().padLeft(2, '0')}';
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const NamiApp());
@@ -27,7 +33,7 @@ class NamiApp extends StatefulWidget {
 
 class _NamiAppState extends State<NamiApp> {
   bool pitchBlack = true;
-  Color accentColor = const Color(0xFFE53935); // Namida Red Default
+  Color accentColor = const Color(0xFFE53935);
 
   void updateTheme({bool? isPitchBlack, Color? newAccent}) {
     setState(() {
@@ -671,6 +677,59 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  void _showExtensionRepoDialog() {
+    final urlCtrl = TextEditingController(text: _mornyeRepoUrl);
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF14141F),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        title: const Text('Extension Repository', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Current repository:', style: TextStyle(fontSize: 12, color: Colors.grey)),
+            const SizedBox(height: 4),
+            Text(_mornyeRepoUrl, style: TextStyle(fontSize: 11, color: Theme.of(context).colorScheme.primary)),
+            const SizedBox(height: 14),
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(
+                hintText: 'Enter registry JSON URL...',
+                filled: true,
+                fillColor: Color(0xFF0A0A0E),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            onPressed: () {
+              setState(() => _mornyeRepoUrl = "");
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Extension repository removed.')));
+            },
+            child: const Text('Remove'),
+          ),
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(backgroundColor: Theme.of(context).colorScheme.primary),
+            onPressed: () {
+              if (urlCtrl.text.trim().isNotEmpty) {
+                setState(() => _mornyeRepoUrl = urlCtrl.text.trim());
+              }
+              Navigator.pop(context);
+              ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Repository saved successfully!')));
+            },
+            child: const Text('Save'),
+          ),
+        ],
       ),
     );
   }
@@ -2739,7 +2798,6 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
     final List<String> tabTitles = ['Nami', 'Tracks', 'Artists', 'Playlists', 'Mornye'];
 
     final List<Widget> pages = [
-      // 0. Home Dashboard
       ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -2849,7 +2907,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 1. Tracks Page (with tight 1.5px gaps)
+      // 1. Tracks Page
       _hasPermission
           ? (_isScanning
               ? Center(child: CircularProgressIndicator(color: Theme.of(context).colorScheme.primary))
@@ -2916,7 +2974,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         },
       ),
 
-      // 3. Playlists Page (with 4 stat cards)
+      // 3. Playlists Page
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 90),
         children: [
@@ -2978,7 +3036,7 @@ class _NamiHomeShellState extends State<NamiHomeShell> {
         ],
       ),
 
-      // 4. Mornye Tab (Search + Batch Download)
+      // 4. Mornye Tab
       ListView(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
         children: [
@@ -3637,6 +3695,4 @@ class _NowPlayingModalState extends State<NowPlayingModal> {
       },
     );
   }
-
-  String _formatDurationPadded(Duration d) => '${d.inMinutes.toString().padLeft(2, '0')}:${(d.inSeconds % 60).toString().padLeft(2, '0')}';
 }
